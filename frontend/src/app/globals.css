@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --surface: 220 33% 99%;
+  --surface-foreground: 222 47% 11%;
+  --primary: 244 75% 59%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 190 91% 42%;
+  --secondary-foreground: 0 0% 100%;
+  --accent: 142 69% 45%;
+  --accent-foreground: 0 0% 100%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --success: 142 71% 45%;
+  --warning: 38 92% 50%;
+  --error: 0 84% 60%;
+}
+
+.dark {
+  --background: 222 47% 11%;
+  --foreground: 210 40% 96%;
+  --card: 217 33% 18%;
+  --card-foreground: 210 40% 96%;
+  --surface: 222 40% 14%;
+  --surface-foreground: 210 40% 96%;
+  --primary: 243 75% 66%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 190 80% 47%;
+  --secondary-foreground: 0 0% 100%;
+  --accent: 142 70% 42%;
+  --accent-foreground: 0 0% 100%;
+  --muted: 217 28% 24%;
+  --muted-foreground: 216 15% 76%;
+  --border: 217 19% 27%;
+  --input: 217 19% 27%;
+  --success: 142 69% 45%;
+  --warning: 42 95% 55%;
+  --error: 0 72% 55%;
+}
+
+body {
+  color: hsl(var(--foreground));
+  background: radial-gradient(circle at top, hsl(var(--surface)) 0%, hsl(var(--background)) 40%);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  h1 {
+    font-size: 1.875rem;
+    line-height: 2.25rem;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    color: hsl(var(--foreground));
+  }
+  h2 {
+    font-size: 1.25rem;
+    line-height: 1.75rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: hsl(var(--foreground));
+  }
+  p {
+    font-size: 1rem;
+    line-height: 1.5rem;
+    color: hsl(var(--muted-foreground));
+  }
+  small {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    color: hsl(var(--muted-foreground));
+  }
+}
