@@ -37,6 +37,7 @@ app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(ResponseEnvelopeMiddleware)
 
 app.include_router(auth.router, prefix=settings.API_PREFIX)
+app.include_router(auth.callback_router)
 app.include_router(users.router, prefix=settings.API_PREFIX)
 app.include_router(organizations.router, prefix=settings.API_PREFIX)
 app.include_router(goals.router, prefix=settings.API_PREFIX)

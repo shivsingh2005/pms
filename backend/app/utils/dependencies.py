@@ -1,15 +1,14 @@
 from uuid import UUID
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.config import get_settings
 from app.core.security import decode_token
 from app.database import get_db
+from app.integrations.google.token_service import GoogleTokenRefreshError, GoogleTokenService
 from app.models.user import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/role-login")
-settings = get_settings()
 
 
 async def get_current_user(
@@ -29,21 +28,24 @@ async def get_current_user(
     return user
 
 
-def get_google_access_token(
-    x_google_access_token: str | None = Header(default=None, alias="X-Google-Access-Token"),
+async def get_google_access_token(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> str:
-    token = (x_google_access_token or settings.GOOGLE_ACCESS_TOKEN or "").strip()
-
-    if not token:
+    refresh_token = (current_user.google_refresh_token or "").strip()
+    if not refresh_token:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Google OAuth access token. Provide X-Google-Access-Token or set GOOGLE_ACCESS_TOKEN in backend .env",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Google Calendar is not connected. Complete Google OAuth to store a refresh token.",
         )
 
-    if token.startswith("AIza"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Google API key detected. Meet/Calendar endpoints require a Google OAuth access token (typically starts with ya29.)",
-        )
+    try:
+        access_token, token_expiry = await GoogleTokenService.get_google_access_token(refresh_token)
+    except GoogleTokenRefreshError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    return token
+    if token_expiry:
+        current_user.google_token_expiry = token_expiry
+        await db.commit()
+
+    return access_token

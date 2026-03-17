@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 from pydantic import BaseModel, Field
 from app.models.enums import GoalFramework, GoalStatus
 
@@ -20,8 +21,8 @@ class GoalUpdate(BaseModel):
 
 
 class GoalOut(BaseModel):
-    id: str
-    user_id: str
+    id: UUID
+    user_id: UUID
     title: str
     description: str | None
     weightage: float

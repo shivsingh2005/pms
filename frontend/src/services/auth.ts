@@ -28,11 +28,14 @@ interface GoogleTokenExchangePayload {
 }
 
 interface GoogleTokenExchangeResponse {
-  access_token: string;
+  connected: boolean;
   expires_in?: number;
   scope?: string;
-  token_type: string;
-  refresh_token?: string;
+}
+
+interface GoogleConnectionStatusResponse {
+  connected: boolean;
+  token_expiry?: string | null;
 }
 
 export const authService = {
@@ -56,6 +59,10 @@ export const authService = {
   },
   async exchangeGoogleCode(payload: GoogleTokenExchangePayload) {
     const { data } = await api.post<GoogleTokenExchangeResponse>("/auth/google/exchange", payload);
+    return data;
+  },
+  async getGoogleConnectionStatus() {
+    const { data } = await api.get<GoogleConnectionStatusResponse>("/auth/google/status");
     return data;
   },
 };

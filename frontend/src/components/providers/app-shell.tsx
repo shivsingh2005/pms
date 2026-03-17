@@ -11,16 +11,19 @@ import {
   LogOut,
   Menu,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Search,
   Sparkles,
   Sun,
   Target,
   Video,
   X,
 } from "lucide-react";
-import { motion } from "framer-motion";
 import { authCookies } from "@/lib/cookies";
 import { useSessionStore } from "@/store/useSessionStore";
 import { cn } from "@/lib/utils";
+import { SidebarItem } from "@/components/navigation/SidebarItem";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -38,6 +41,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [dark, setDark] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const user = useSessionStore((s) => s.user);
   const logout = useSessionStore((s) => s.logout);
@@ -48,6 +52,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const isDark = saved ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
     document.documentElement.classList.toggle("dark", isDark);
     setDark(isDark);
+
+    const collapsed = typeof window !== "undefined" ? localStorage.getItem("pms-sidebar-collapsed") : null;
+    setSidebarCollapsed(collapsed === "true");
   }, []);
 
   const toggleTheme = () => {
@@ -64,6 +71,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setUserMenuOpen(false);
     setMobileNavOpen(false);
     router.push("/");
+  };
+
+  const toggleSidebar = () => {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    localStorage.setItem("pms-sidebar-collapsed", next ? "true" : "false");
   };
 
   useEffect(() => {
@@ -91,47 +104,46 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .join("") ?? "U";
 
   const sidebarLinks = (
-    <div className="space-y-1.5 px-3">
+    <div className="space-y-1 px-3">
       {nav.map((item) => {
         const active = pathname === item.href;
-        const Icon = item.icon;
         return (
-          <Link
+          <SidebarItem
             key={item.href}
             href={item.href}
-            className={cn(
-              "relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition",
-              active ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            <span>{item.label}</span>
-            {active && <motion.div layoutId="nav-highlight" className="absolute inset-0 rounded-lg border border-primary/40" />}
-          </Link>
+            label={item.label}
+            active={active}
+            icon={item.icon}
+            collapsed={sidebarCollapsed}
+          />
         );
       })}
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background text-foreground">
       {withAppShell && (
         <>
-          <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r bg-card lg:flex lg:flex-col">
-            <div className="flex h-16 items-center border-b px-4">
+          <aside className={cn("fixed inset-y-0 left-0 z-40 hidden border-r border-gray-200 bg-card/95 backdrop-blur transition-all duration-200 dark:border-gray-800 lg:flex lg:flex-col", sidebarCollapsed ? "w-20" : "w-64")}>
+            <div className={cn("flex h-16 items-center border-b border-border/70", sidebarCollapsed ? "justify-center px-2" : "px-5")}>
               <Link href="/dashboard" className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
-                <span className="rounded-lg bg-primary/10 p-1.5 text-primary">
-                  <Sparkles className="h-4 w-4" />
+                <span className="rounded-xl border border-primary/20 bg-primary/15 p-1.5 text-primary shadow-card">
+                  <Sparkles className="h-4 w-4" aria-hidden="true" />
                 </span>
-                AI PMS
+                {!sidebarCollapsed ? "AI Native PMS" : null}
               </Link>
             </div>
-            <div className="flex-1 py-4">{sidebarLinks}</div>
-            <div className="border-t p-4">
-              <div className="rounded-lg bg-muted/60 p-3">
-                <p className="truncate text-sm font-medium text-foreground">{user?.name}</p>
-                <p className="truncate text-xs uppercase tracking-wide text-muted-foreground">{user?.role}</p>
-              </div>
+            <div className="flex-1 py-5">{sidebarLinks}</div>
+            <div className="border-t border-border/70 p-4">
+              {sidebarCollapsed ? (
+                <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">{initials}</div>
+              ) : (
+                <div className="rounded-xl border border-border/70 bg-surface/65 p-3">
+                  <p className="truncate text-sm font-medium text-foreground">{user?.name}</p>
+                  <p className="truncate text-xs uppercase tracking-wide text-muted-foreground">{user?.role}</p>
+                </div>
+              )}
             </div>
           </aside>
 
@@ -143,13 +155,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 onClick={() => setMobileNavOpen(false)}
                 aria-label="Close mobile menu"
               />
-              <aside className="relative z-10 flex h-full w-60 flex-col border-r bg-card">
-                <div className="flex h-16 items-center justify-between border-b px-4">
+              <aside className="relative z-10 flex h-full w-64 flex-col border-r border-gray-200 bg-card dark:border-gray-800">
+                <div className="flex h-16 items-center justify-between border-b border-border/70 px-4">
                   <Link href="/dashboard" className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
-                    <span className="rounded-lg bg-primary/10 p-1.5 text-primary">
+                    <span className="rounded-xl border border-primary/20 bg-primary/15 p-1.5 text-primary">
                       <Sparkles className="h-4 w-4" />
                     </span>
-                    AI PMS
+                    AI Native PMS
                   </Link>
                   <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setMobileNavOpen(false)}>
                     <X className="h-4 w-4" />
@@ -160,14 +172,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           )}
 
-          <header className="fixed inset-x-0 top-0 z-30 h-16 border-b bg-card/95 backdrop-blur lg:left-60">
-            <div className="flex h-full items-center justify-between gap-4 px-4 sm:px-6">
+          <header className={cn("fixed inset-x-0 top-0 z-30 h-16 border-b border-border/70 bg-card/85 backdrop-blur-lg transition-all duration-200", sidebarCollapsed ? "lg:left-20" : "lg:left-64")}>
+            <div className="flex h-full items-center justify-between gap-4 px-4 sm:px-8">
               <div className="flex min-w-0 flex-1 items-center gap-3">
                 <Button variant="ghost" size="sm" className="h-9 w-9 p-0 lg:hidden" onClick={() => setMobileNavOpen(true)}>
                   <Menu className="h-4 w-4" />
                 </Button>
-                <div className="max-w-md flex-1">
-                  <Input placeholder="Search..." className="h-9 bg-background" />
+                <Button variant="ghost" size="sm" className="hidden h-9 w-9 p-0 lg:inline-flex" onClick={toggleSidebar} aria-label="Toggle sidebar">
+                  {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+                </Button>
+                <div className="relative max-w-md flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input placeholder="Search goals, check-ins, reviews..." className="h-10 rounded-xl bg-background pl-9" />
                 </div>
               </div>
 
@@ -175,7 +191,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Button variant="ghost" size="sm" className="h-9 w-9 rounded-full p-0" aria-label="Notifications">
                   <Bell className="h-4 w-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={toggleTheme} className="h-9 w-9 rounded-full p-0">
+                <Button variant="secondary" size="sm" onClick={toggleTheme} className="h-9 w-9 rounded-full p-0" aria-label="Toggle theme">
                   {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 </Button>
                 <div className="relative" ref={userMenuRef}>
@@ -190,7 +206,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     </span>
                   </Button>
                   {userMenuOpen && (
-                    <div className="absolute right-0 top-11 w-52 rounded-xl border bg-card p-2 shadow-sm">
+                    <div className="absolute right-0 top-11 w-56 rounded-2xl border border-border/80 bg-card p-2.5 shadow-floating">
                       <div className="px-2 py-2">
                         <p className="truncate text-sm font-medium text-foreground">{user?.name}</p>
                         <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
@@ -208,8 +224,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </>
       )}
 
-      <main className={cn("min-h-screen", withAppShell ? "pt-16 lg:pl-60" : "")}> 
-        <div className={cn(withAppShell ? "h-[calc(100vh-4rem)] overflow-y-auto" : "")}> 
+      <main className={cn("min-h-screen", withAppShell ? (sidebarCollapsed ? "pt-16 lg:pl-20" : "pt-16 lg:pl-64") : "") }>
+        <div className={cn(withAppShell ? "h-[calc(100vh-4rem)] overflow-y-auto" : "")}>
           <div className="mx-auto w-full max-w-7xl px-6 py-6">{children}</div>
         </div>
       </main>

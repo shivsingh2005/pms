@@ -9,6 +9,10 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["var(--font-geist-mono)", "ui-monospace", "monospace"],
+      },
       colors: {
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
@@ -39,10 +43,17 @@ const config: Config = {
         error: "hsl(var(--error))",
       },
       boxShadow: {
-        soft: "0 1px 2px 0 rgb(15 23 42 / 0.06), 0 8px 20px -12px rgb(15 23 42 / 0.22)",
+        soft: "var(--shadow-sm)",
+        card: "var(--shadow-xs)",
+        elevated: "var(--shadow-md)",
+        floating: "var(--shadow-lg)",
       },
       borderRadius: {
-        xl2: "1rem",
+        sm: "var(--radius-sm)",
+        md: "var(--radius-md)",
+        lg: "var(--radius-lg)",
+        xl: "var(--radius-xl)",
+        xl2: "var(--radius-xl)",
       },
     },
   },

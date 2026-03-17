@@ -131,9 +131,16 @@ docker run --env-file .env -p 8000:8000 pms-backend
 - `POST /api/v1/meetings/{meeting_id}/transcript-sync`
 - `GET /api/v1/meetings/analytics/summary`
 
-Calendar and Meet endpoints require the header `X-Google-Access-Token` with a valid Google OAuth access token carrying scopes:
+Calendar and Meet endpoints use server-side Google OAuth token refresh. Frontend does not send Google access tokens.
+
+Required Google OAuth scopes:
+- `openid`
+- `email`
+- `profile`
 - `https://www.googleapis.com/auth/calendar`
 - `https://www.googleapis.com/auth/calendar.events`
+
+Google authorization is requested with `access_type=offline` and `prompt=consent` so a refresh token can be stored for each user.
 
 ## AI Access and Usage Limits
 - Employee: goal suggestions, career growth suggestions (3 uses per quarter)

@@ -30,11 +30,14 @@ class GoogleTokenExchangeRequest(BaseModel):
 
 
 class GoogleTokenExchangeResponse(BaseModel):
-    access_token: str
+    connected: bool
     expires_in: int | None = None
     scope: str | None = None
-    token_type: str = "Bearer"
-    refresh_token: str | None = None
+
+
+class GoogleConnectionStatusResponse(BaseModel):
+    connected: bool
+    token_expiry: str | None = None
 
 
 class AuthUserResponse(BaseModel):

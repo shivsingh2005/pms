@@ -19,7 +19,7 @@ export function ProgressRing({ value, size = 92 }: { value: number; size?: numbe
   return (
     <div className="relative" style={{ width: size, height: size }}>
       <svg width={size} height={size}>
-        <circle cx={size / 2} cy={size / 2} r={radius} stroke="hsl(var(--muted))" strokeWidth={stroke} fill="none" />
+        <circle cx={size / 2} cy={size / 2} r={radius} stroke="hsl(var(--muted))" strokeWidth={stroke} fill="none" opacity={0.65} />
         <motion.circle
           cx={size / 2}
           cy={size / 2}
@@ -31,7 +31,7 @@ export function ProgressRing({ value, size = 92 }: { value: number; size?: numbe
           strokeDasharray={circumference}
           animate={{ strokeDashoffset: offset }}
           initial={{ strokeDashoffset: circumference }}
-          transition={{ duration: 0.7 }}
+          transition={{ type: "spring", stiffness: 120, damping: 18 }}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>

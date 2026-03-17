@@ -1,4 +1,5 @@
-from sqlalchemy import Boolean, Enum, ForeignKey, String
+from datetime import datetime
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, UUIDMixin
@@ -18,6 +19,8 @@ class User(Base, UUIDMixin, TimestampMixin):
     department: Mapped[str | None] = mapped_column(String, nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    google_refresh_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    google_token_expiry: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     organization = relationship("Organization", back_populates="users")
     manager = relationship("User", remote_side="User.id")

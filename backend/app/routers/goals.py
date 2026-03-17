@@ -14,7 +14,7 @@ router = APIRouter(prefix="/goals", tags=["Goals"])
 @router.post("", response_model=GoalOut)
 async def create_goal(
     payload: GoalCreate,
-    current_user: User = Depends(require_roles(UserRole.employee, UserRole.manager)),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> GoalOut:
     goal = await GoalService.create_goal(current_user, payload, db)

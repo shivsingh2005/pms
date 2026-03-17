@@ -2,20 +2,36 @@ from datetime import datetime, timezone
 from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy import case, func, select
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cache import cache_get, cache_set
 from app.integrations.google.calendar_client import GoogleCalendarAPIError, GoogleCalendarAuthError
 from app.integrations.google.calendar_service import CalendarService
+from app.ai.ai_service import AIService
 from app.models.checkin import Checkin
 from app.models.enums import MeetingStatus, UserRole
+from app.models.goal import Goal
 from app.models.meeting import Meeting
 from app.models.user import User
 from app.schemas.meeting import MeetingCreateRequest, MeetingUpdateRequest
 
 
 class MeetService:
-    def __init__(self, access_token: str):
-        self.calendar_service = CalendarService(access_token)
+    def __init__(self, access_token: str | None = None):
+        self._access_token = access_token
+        self._calendar_service: CalendarService | None = None
+
+    @property
+    def calendar_service(self) -> CalendarService:
+        if self._calendar_service is not None:
+            return self._calendar_service
+        if not self._access_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Google Calendar is not connected for this account",
+            )
+        self._calendar_service = CalendarService(self._access_token)
+        return self._calendar_service
 
     @staticmethod
     def _validate_create_role(user: User) -> None:
@@ -56,6 +72,15 @@ class MeetService:
 
     async def create_meeting(self, current_user: User, payload: MeetingCreateRequest, db: AsyncSession) -> Meeting:
         self._validate_create_role(current_user)
+
+        goal_result = await db.execute(select(Goal).where(Goal.id == payload.goal_id))
+        goal = goal_result.scalar_one_or_none()
+        if not goal:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+
+        if current_user.role == UserRole.employee and goal.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to create meeting for this goal")
+
         try:
             event = await self.calendar_service.client.create_event(
                 title=payload.title,
@@ -69,6 +94,24 @@ class MeetService:
         except GoogleCalendarAPIError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
+        google_event_id = event.get("id")
+        if not google_event_id:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Google Calendar returned an invalid event response (missing event id)",
+            )
+
+        conference_data = event.get("conferenceData") or {}
+        entry_points = conference_data.get("entryPoints") or []
+        conference_uri = next(
+            (
+                entry.get("uri")
+                for entry in entry_points
+                if isinstance(entry, dict) and entry.get("uri")
+            ),
+            None,
+        )
+
         meeting = Meeting(
             title=payload.title,
             description=payload.description,
@@ -76,13 +119,20 @@ class MeetService:
             goal_id=payload.goal_id,
             start_time=payload.start_time,
             end_time=payload.end_time,
-            google_event_id=event.get("id", ""),
-            google_meet_link=event.get("hangoutLink") or event.get("conferenceData", {}).get("entryPoints", [{}])[0].get("uri"),
+            google_event_id=google_event_id,
+            google_meet_link=event.get("hangoutLink") or conference_uri,
             participants=payload.participants,
             status=MeetingStatus.scheduled,
         )
         db.add(meeting)
-        await db.commit()
+        try:
+            await db.commit()
+        except DataError as exc:
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid meeting payload") from exc
+        except IntegrityError as exc:
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Meeting could not be created due to a data conflict") from exc
         await db.refresh(meeting)
         return meeting
 
@@ -227,3 +277,55 @@ class MeetService:
         }
         await cache_set(cache_key, payload)
         return payload
+
+    async def summarize_meeting(self, meeting_id: str, current_user: User, db: AsyncSession) -> dict:
+        meeting = await self.get_meeting(meeting_id, current_user, db)
+
+        stmt = select(Checkin).where(Checkin.goal_id == meeting.goal_id).order_by(Checkin.meeting_date.desc())
+        result = await db.execute(stmt)
+        checkins = list(result.scalars().all())
+
+        linked_checkin = None
+        for item in checkins:
+            if (item.meeting_link or "").strip() == (meeting.google_meet_link or "").strip():
+                linked_checkin = item
+                break
+        if linked_checkin is None and checkins:
+            linked_checkin = checkins[0]
+
+        if linked_checkin is None:
+            return {
+                "meeting_id": str(meeting.id),
+                "summary": "Meeting not started yet",
+                "key_points": [],
+                "action_items": [],
+            }
+
+        transcript = (linked_checkin.transcript or "").strip()
+        if not transcript:
+            summary_notes = (linked_checkin.summary or "").strip()
+            if summary_notes:
+                transcript = f"Meeting notes:\n{summary_notes}"
+
+        if not transcript:
+            return {
+                "meeting_id": str(meeting.id),
+                "summary": "Meeting not started yet",
+                "key_points": [],
+                "action_items": [],
+            }
+
+        ai_service = AIService()
+        ai_payload = await ai_service.summarize_checkin_transcript(current_user, transcript, db)
+
+        ai_summary = str(ai_payload.get("summary") or "").strip()
+        if ai_summary:
+            linked_checkin.summary = ai_summary
+            await db.commit()
+
+        return {
+            "meeting_id": str(meeting.id),
+            "summary": ai_summary or "Summary unavailable",
+            "key_points": list(ai_payload.get("key_points") or []),
+            "action_items": list(ai_payload.get("action_items") or []),
+        }

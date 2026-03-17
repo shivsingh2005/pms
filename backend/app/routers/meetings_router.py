@@ -6,6 +6,7 @@ from app.integrations.google.meet_service import MeetService
 from app.models.user import User
 from app.schemas.meeting import (
     AvailabilityResponse,
+    MeetingAISummaryResponse,
     MeetingCreateRequest,
     MeetingsAnalyticsResponse,
     MeetingOut,
@@ -46,10 +47,9 @@ async def create_meeting(
 @router.get("/meetings", response_model=list[MeetingOut])
 async def list_meetings(
     current_user: User = Depends(get_current_user),
-    google_access_token: str = Depends(get_google_access_token),
     db: AsyncSession = Depends(get_db),
 ) -> list[MeetingOut]:
-    service = MeetService(google_access_token)
+    service = MeetService()
     meetings = await service.list_meetings(current_user, db)
     return [MeetingOut.model_validate(meeting) for meeting in meetings]
 
@@ -58,10 +58,9 @@ async def list_meetings(
 async def get_meeting(
     meeting_id: str,
     current_user: User = Depends(get_current_user),
-    google_access_token: str = Depends(get_google_access_token),
     db: AsyncSession = Depends(get_db),
 ) -> MeetingOut:
-    service = MeetService(google_access_token)
+    service = MeetService()
     meeting = await service.get_meeting(meeting_id, current_user, db)
     return MeetingOut.model_validate(meeting)
 
@@ -106,9 +105,19 @@ async def sync_transcript(
 @router.get("/meetings/analytics/summary", response_model=MeetingsAnalyticsResponse)
 async def meetings_analytics(
     current_user: User = Depends(get_current_user),
-    google_access_token: str = Depends(get_google_access_token),
     db: AsyncSession = Depends(get_db),
 ) -> MeetingsAnalyticsResponse:
-    service = MeetService(google_access_token)
+    service = MeetService()
     payload = await service.analytics(current_user, db)
     return MeetingsAnalyticsResponse(**payload)
+
+
+@router.post("/meetings/{meeting_id}/ai-summary", response_model=MeetingAISummaryResponse)
+async def summarize_meeting(
+    meeting_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeetingAISummaryResponse:
+    service = MeetService()
+    payload = await service.summarize_meeting(meeting_id, current_user, db)
+    return MeetingAISummaryResponse(**payload)

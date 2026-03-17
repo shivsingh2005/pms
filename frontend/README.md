@@ -45,5 +45,5 @@ npm run dev
 - GET `/auth/me` bootstraps role-aware UI
 
 ## Notes
-- Meetings endpoints require `X-Google-Access-Token` header from calendar connect flow.
+- Meetings endpoints do not accept client-side Google tokens; backend refreshes access tokens using stored OAuth refresh tokens.
 - AI chat widget uses `POST /ai/chat` and shows safe fallback text when unavailable.

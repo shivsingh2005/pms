@@ -18,7 +18,12 @@ class GoogleCalendarAPIError(Exception):
 
 class GoogleCalendarClient:
     def __init__(self, access_token: str):
-        scopes = [scope.strip() for scope in settings.GOOGLE_CALENDAR_SCOPES.split(",") if scope.strip()]
+        # Accept comma or whitespace-delimited scope strings from environment configuration.
+        scopes = [
+            scope.strip()
+            for scope in settings.GOOGLE_CALENDAR_SCOPES.replace(",", " ").split()
+            if scope.strip()
+        ]
         credentials = Credentials(token=access_token, scopes=scopes)
         self.service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
 

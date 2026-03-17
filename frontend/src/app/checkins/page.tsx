@@ -7,9 +7,12 @@ import { checkinsService } from "@/services/checkins";
 import type { Checkin } from "@/types";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { DataTable } from "@/components/ui/data-table";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/ui/page-header";
+import { SectionContainer } from "@/components/layout/SectionContainer";
 import { formatDateTime } from "@/lib/utils";
 import { useSessionStore } from "@/store/useSessionStore";
 import { aiService } from "@/services/ai";
@@ -91,16 +94,16 @@ export default function CheckinsPage() {
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-7">
       <PageHeader
         title="Check-ins"
         description="Schedule one-on-ones, capture notes, and generate AI summaries."
         action={<Button variant="outline" onClick={() => load().catch(() => null)}>Refresh</Button>}
       />
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-        <Card className="space-y-4 xl:col-span-4">
-          <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+      <SectionContainer columns="dashboard">
+        <Card className="space-y-4 rounded-2xl border border-border/75 bg-card/95 xl:col-span-4">
+          <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
             <CalendarCheck className="h-3.5 w-3.5" /> Check-in Planner
           </div>
           <CardTitle>Schedule Check-in</CardTitle>
@@ -119,7 +122,7 @@ export default function CheckinsPage() {
         </Card>
 
         <div className="space-y-6 xl:col-span-8">
-          <Card className="space-y-4">
+          <Card className="space-y-4 rounded-2xl border border-border/75 bg-card/95">
             <CardTitle>Attach Notes + AI Summary</CardTitle>
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Meeting Notes</label>
@@ -129,20 +132,39 @@ export default function CheckinsPage() {
             {aiSummary && <CardDescription className="whitespace-pre-wrap">{aiSummary}</CardDescription>}
           </Card>
 
-          <Card>
+          <Card className="rounded-2xl border border-border/75 bg-card/95">
             <CardTitle>Past Check-ins</CardTitle>
-            <div className="mt-4 space-y-3">
-              {items.map((item) => (
-                <div key={item.id} className="rounded-xl border p-4 text-sm text-muted-foreground transition hover:bg-muted/40">
-                  <div className="font-medium text-foreground">{item.status.toUpperCase()}</div>
-                  <div>{formatDateTime(item.meeting_date)}</div>
-                  {item.summary && <div className="mt-1">Summary: {item.summary}</div>}
-                </div>
-              ))}
+            <div className="mt-4">
+              <DataTable
+                rows={items}
+                rowKey={(row) => row.id}
+                emptyState="No check-ins scheduled yet"
+                columns={[
+                  {
+                    key: "status",
+                    header: "Status",
+                    render: (row) => (
+                      <Badge className={row.status === "completed" ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}>
+                        {row.status}
+                      </Badge>
+                    ),
+                  },
+                  {
+                    key: "meeting_date",
+                    header: "Meeting Date",
+                    render: (row) => formatDateTime(row.meeting_date),
+                  },
+                  {
+                    key: "summary",
+                    header: "Summary",
+                    render: (row) => row.summary || "-",
+                  },
+                ]}
+              />
             </div>
           </Card>
         </div>
-      </div>
+      </SectionContainer>
     </motion.div>
   );
 }

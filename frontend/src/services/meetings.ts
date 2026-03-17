@@ -11,28 +11,26 @@ interface MeetingPayload {
 }
 
 export const meetingsService = {
-  async getMeetings(googleAccessToken: string) {
-    const { data } = await api.get<Meeting[]>("/meetings", {
-      headers: { "X-Google-Access-Token": googleAccessToken },
-    });
+  async getMeetings() {
+    const { data } = await api.get<Meeting[]>("/meetings");
     return data;
   },
-  async createMeeting(payload: MeetingPayload, googleAccessToken: string) {
-    const { data } = await api.post<Meeting>("/meetings/create", payload, {
-      headers: { "X-Google-Access-Token": googleAccessToken },
-    });
+  async createMeeting(payload: MeetingPayload) {
+    const { data } = await api.post<Meeting>("/meetings/create", payload);
     return data;
   },
-  async updateMeeting(id: string, payload: Partial<MeetingPayload>, googleAccessToken: string) {
-    const { data } = await api.patch<Meeting>(`/meetings/${id}`, payload, {
-      headers: { "X-Google-Access-Token": googleAccessToken },
-    });
+  async updateMeeting(id: string, payload: Partial<MeetingPayload>) {
+    const { data } = await api.patch<Meeting>(`/meetings/${id}`, payload);
     return data;
   },
-  async cancelMeeting(id: string, googleAccessToken: string) {
-    const { data } = await api.delete<Meeting>(`/meetings/${id}`, {
-      headers: { "X-Google-Access-Token": googleAccessToken },
-    });
+  async cancelMeeting(id: string) {
+    const { data } = await api.delete<Meeting>(`/meetings/${id}`);
+    return data;
+  },
+  async summarizeMeeting(id: string) {
+    const { data } = await api.post<{ meeting_id: string; summary: string; key_points: string[]; action_items: string[] }>(
+      `/meetings/${id}/ai-summary`,
+    );
     return data;
   },
 };

@@ -24,7 +24,6 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:3000/auth/google/callback"
     SESSION_SECRET: str = "change-this-session-secret"
-    GOOGLE_ACCESS_TOKEN: str = ""
     GOOGLE_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3-flash-preview"
@@ -38,6 +37,7 @@ class Settings(BaseSettings):
     CACHE_TTL_SECONDS: int = 300
 
     CORS_ALLOW_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    FRONTEND_BASE_URL: str = "http://localhost:3000"
 
     @model_validator(mode="after")
     def apply_compatibility_aliases(self):

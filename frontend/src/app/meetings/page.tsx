@@ -1,73 +1,157 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { CalendarDays } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useMeetingsStore } from "@/store/useMeetingsStore";
-import { useSessionStore } from "@/store/useSessionStore";
+import { goalsService } from "@/services/goals";
+import type { Goal } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/ui/page-header";
 import { MeetingCard } from "@/components/meetings/MeetingCard";
+import { SectionContainer } from "@/components/layout/SectionContainer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { authService } from "@/services/auth";
 
-const defaultGoogleAccessToken = process.env.NEXT_PUBLIC_GOOGLE_ACCESS_TOKEN || "";
+function extractErrorMessage(error: unknown): string {
+  if (error && typeof error === "object") {
+    const maybeAxios = error as {
+      response?: { data?: { error?: unknown; message?: unknown } };
+      message?: unknown;
+    };
+    const apiError = maybeAxios.response?.data?.error;
+    if (typeof apiError === "string" && apiError.trim()) {
+      return apiError;
+    }
+    const apiMessage = maybeAxios.response?.data?.message;
+    if (typeof apiMessage === "string" && apiMessage.trim()) {
+      return apiMessage;
+    }
+    if (typeof maybeAxios.message === "string" && maybeAxios.message.trim()) {
+      return maybeAxios.message;
+    }
+  }
+  return "Request failed";
+}
+
+const MEETING_DRAFT_KEY = "pms-meeting-draft";
+
+interface MeetingDraft {
+  title: string;
+  description: string;
+  start: string;
+  end: string;
+  goalId: string;
+  participants: string;
+}
 
 export default function MeetingsPage() {
+  const router = useRouter();
   const { meetings, loading, fetchMeetings, createMeeting } = useMeetingsStore();
-  const { googleAccessToken, setGoogleAccessToken } = useSessionStore();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [goalId, setGoalId] = useState("");
   const [participants, setParticipants] = useState("");
-  const [manualAccessToken, setManualAccessToken] = useState(googleAccessToken ?? defaultGoogleAccessToken);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [goalsLoading, setGoalsLoading] = useState(false);
+  const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
+  const oauthHandledRef = useRef(false);
 
-  const validateGoogleToken = (token: string) => {
-    const trimmed = token.trim();
-    if (!trimmed) return false;
-    if (trimmed.startsWith("AIza")) {
-      toast.error("Google API key detected. Use a Google OAuth access token for Meet (usually starts with ya29.)");
-      return false;
+  const getCurrentDraft = (): MeetingDraft => ({
+    title,
+    description,
+    start,
+    end,
+    goalId,
+    participants,
+  });
+
+  const persistDraft = () => {
+    if (typeof window === "undefined") return;
+    sessionStorage.setItem(MEETING_DRAFT_KEY, JSON.stringify(getCurrentDraft()));
+  };
+
+  const clearDraft = () => {
+    if (typeof window === "undefined") return;
+    sessionStorage.removeItem(MEETING_DRAFT_KEY);
+  };
+
+  const restoreDraft = (): MeetingDraft | null => {
+    if (typeof window === "undefined") return null;
+    const raw = sessionStorage.getItem(MEETING_DRAFT_KEY);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Partial<MeetingDraft>;
+      return {
+        title: parsed.title ?? "",
+        description: parsed.description ?? "",
+        start: parsed.start ?? "",
+        end: parsed.end ?? "",
+        goalId: parsed.goalId ?? "",
+        participants: parsed.participants ?? "",
+      };
+    } catch {
+      return null;
     }
-    return true;
+  };
+
+  const applyDraft = (draft: MeetingDraft) => {
+    setTitle(draft.title);
+    setDescription(draft.description);
+    setStart(draft.start);
+    setEnd(draft.end);
+    setGoalId(draft.goalId);
+    setParticipants(draft.participants);
   };
 
   useEffect(() => {
-    if (!googleAccessToken && defaultGoogleAccessToken && validateGoogleToken(defaultGoogleAccessToken)) {
-      setGoogleAccessToken(defaultGoogleAccessToken.trim());
-    }
-  }, [googleAccessToken, setGoogleAccessToken]);
+    fetchMeetings().catch(() => null);
+  }, [fetchMeetings]);
 
   useEffect(() => {
-    if (googleAccessToken) {
-      fetchMeetings(googleAccessToken).catch(() => null);
-    }
-  }, [fetchMeetings, googleAccessToken]);
+    setGoalsLoading(true);
+    goalsService
+      .getGoals()
+      .then((items) => {
+        setGoals(items);
+      })
+      .catch(() => {
+        setGoals([]);
+      })
+      .finally(() => {
+        setGoalsLoading(false);
+      });
+  }, []);
 
-  const submit = async () => {
-    if (!googleAccessToken) {
-      toast.error("Google OAuth access token is required to create meetings");
-      return;
-    }
+  useEffect(() => {
+    authService
+      .getGoogleConnectionStatus()
+      .then((status) => setGoogleConnected(status.connected))
+      .catch(() => setGoogleConnected(null));
+  }, []);
 
-    if (!title.trim()) {
+  const submit = useCallback(async (draftOverride?: MeetingDraft) => {
+    const source = draftOverride ?? getCurrentDraft();
+
+    if (!source.title.trim()) {
       toast.error("Meeting title is required");
       return;
     }
 
-    if (!start || !end) {
+    if (!source.start || !source.end) {
       toast.error("Start and end times are required");
       return;
     }
 
-    const startDate = new Date(start);
-    const endDate = new Date(end);
+    const startDate = new Date(source.start);
+    const endDate = new Date(source.end);
 
     if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
       toast.error("Please provide valid start and end times");
@@ -79,40 +163,96 @@ export default function MeetingsPage() {
       return;
     }
 
-    if (!goalId.trim()) {
+    if (!source.goalId.trim()) {
       toast.error("Goal ID is required");
       return;
     }
 
-    const participantList = participants.split(",").map((p) => p.trim()).filter(Boolean);
+    const participantList = source.participants.split(",").map((p) => p.trim()).filter(Boolean);
 
     if (participantList.length === 0) {
       toast.error("At least one participant email is required");
       return;
     }
 
-    await createMeeting(
-      {
-        title: title.trim(),
-        description,
+    try {
+      await createMeeting({
+        title: source.title.trim(),
+        description: source.description,
         start_time: startDate.toISOString(),
         end_time: endDate.toISOString(),
-        goal_id: goalId.trim(),
+        goal_id: source.goalId.trim(),
         participants: participantList,
-      },
-      googleAccessToken,
-    );
-    setTitle("");
-    setDescription("");
-    setStart("");
-    setEnd("");
-    setGoalId("");
-    setParticipants("");
-    toast.success("Meeting created");
-  };
+      });
+      setTitle("");
+      setDescription("");
+      setStart("");
+      setEnd("");
+      setGoalId("");
+      setParticipants("");
+      clearDraft();
+      toast.success("Meeting created");
+    } catch (error: unknown) {
+      const message = extractErrorMessage(error);
+      const needsGoogleReconnect =
+        message.includes("Google Calendar is not connected") ||
+        message.includes("Google access token refresh failed") ||
+        message.includes("Google calendar authorization failed") ||
+        message.includes("invalid_grant") ||
+        message.includes("invalid_client");
+
+      if (needsGoogleReconnect) {
+        persistDraft();
+        setGoogleConnected(false);
+        toast.info("Google session expired or missing. Reconnecting Google Calendar...");
+        await connectGoogleCalendar();
+        return;
+      }
+      toast.error(message);
+    }
+  }, [createMeeting, title, description, start, end, goalId, participants]);
+
+  useEffect(() => {
+    if (oauthHandledRef.current) {
+      return;
+    }
+
+    const params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+    const connected = params.get("google_connected");
+    const reason = params.get("reason");
+
+    if (!connected && !reason) {
+      const draft = restoreDraft();
+      if (draft) {
+        applyDraft(draft);
+      }
+      return;
+    }
+
+    oauthHandledRef.current = true;
+
+    if (connected === "1") {
+      setGoogleConnected(true);
+      toast.success("Google Calendar connected successfully");
+      const draft = restoreDraft();
+      if (draft && draft.title.trim()) {
+        applyDraft(draft);
+        toast.info("Meeting draft restored. Creating meeting...");
+        setTimeout(() => {
+          submit(draft).catch(() => null);
+        }, 0);
+      }
+    } else {
+      setGoogleConnected(false);
+      toast.error(`Google Calendar connection failed${reason ? `: ${reason.replaceAll("_", " ")}` : ""}`);
+    }
+
+    router.replace("/meetings");
+  }, [router, submit]);
 
   const connectGoogleCalendar = async () => {
     try {
+      persistDraft();
       const { authorization_url } = await authService.getGoogleAuthorizeUrl();
       if (!authorization_url) {
         toast.error("Google OAuth is not configured on backend");
@@ -125,22 +265,22 @@ export default function MeetingsPage() {
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-7">
       <PageHeader
         title="Meetings"
         description="Create and track Google Calendar meetings with Meet links and participants."
         action={
           <div className="flex items-center gap-2">
+            {googleConnected !== null && (
+              <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${googleConnected ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}>
+                {googleConnected ? "Google connected" : "Google not connected"}
+              </span>
+            )}
             <Button variant="outline" onClick={connectGoogleCalendar}>Connect Google Calendar</Button>
             <Button
               variant="outline"
               onClick={() => {
-                if (googleAccessToken) {
-                  fetchMeetings(googleAccessToken).catch(() => null);
-                  return;
-                }
-
-                toast.error("Connect Google Calendar or add an access token before refreshing meetings");
+                fetchMeetings().catch(() => null);
               }}
             >
               Refresh
@@ -149,35 +289,13 @@ export default function MeetingsPage() {
         }
       />
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-        <Card className="space-y-4 xl:col-span-4">
-          <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+      <SectionContainer columns="dashboard">
+        <Card className="space-y-4 rounded-2xl border border-border/75 bg-card/95 xl:col-span-4">
+          <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
             <CalendarDays className="h-3.5 w-3.5" /> Meeting Scheduler
           </div>
           <CardTitle>Schedule Meeting</CardTitle>
-          <CardDescription>Create Google Calendar event with Meet link and invites.</CardDescription>
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">Google Access Token</label>
-            <Input
-              placeholder="Google access token"
-              value={manualAccessToken}
-              onChange={(e) => setManualAccessToken(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Meet endpoints require a Google OAuth access token (not an API key).
-            </p>
-          </div>
-          <Button
-            onClick={() => {
-              if (!validateGoogleToken(manualAccessToken)) return;
-              setGoogleAccessToken(manualAccessToken.trim());
-            }}
-            disabled={!manualAccessToken.trim()}
-            variant="outline"
-          >
-            Use Access Token
-          </Button>
+          <CardDescription>Google Calendar tokens are managed securely by backend using your OAuth refresh token.</CardDescription>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-1">
             <div className="space-y-2">
@@ -197,8 +315,20 @@ export default function MeetingsPage() {
               <Input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Goal ID</label>
-              <Input placeholder="Goal ID" value={goalId} onChange={(e) => setGoalId(e.target.value)} />
+              <label className="text-sm font-medium text-foreground">Goal</label>
+              <select
+                value={goalId}
+                onChange={(e) => setGoalId(e.target.value)}
+                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground"
+                disabled={goalsLoading}
+              >
+                <option value="">{goalsLoading ? "Loading goals..." : "Select a goal"}</option>
+                {goals.map((goal) => (
+                  <option key={goal.id} value={goal.id}>
+                    {goal.title}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Participants</label>
@@ -206,11 +336,11 @@ export default function MeetingsPage() {
             </div>
           </div>
 
-          <Button onClick={submit} disabled={!googleAccessToken}>Create Meeting</Button>
+          <Button onClick={() => submit().catch(() => null)}>Create Meeting</Button>
         </Card>
 
         <div className="space-y-6 xl:col-span-8">
-          <Card>
+          <Card className="rounded-2xl border border-border/75 bg-card/95">
             <CardTitle>Meeting Timeline</CardTitle>
             <CardDescription>Upcoming and historical meetings synced with Google Calendar.</CardDescription>
           </Card>
@@ -220,7 +350,7 @@ export default function MeetingsPage() {
               : meetings.map((meeting) => <MeetingCard key={meeting.id} meeting={meeting} />)}
           </div>
         </div>
-      </div>
+      </SectionContainer>
     </motion.div>
   );
 }

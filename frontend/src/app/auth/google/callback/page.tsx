@@ -2,15 +2,14 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { motion } from "framer-motion";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { authService } from "@/services/auth";
-import { useSessionStore } from "@/store/useSessionStore";
 import { Button } from "@/components/ui/button";
 
 function GoogleCallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const setGoogleAccessToken = useSessionStore((state) => state.setGoogleAccessToken);
   const [status, setStatus] = useState("Completing Google sign-in...");
   const [error, setError] = useState<string | null>(null);
 
@@ -32,11 +31,7 @@ function GoogleCallbackContent() {
 
     authService
       .exchangeGoogleCode({ code, redirect_uri: window.location.origin + "/auth/google/callback" })
-      .then((token) => {
-        if (!token.access_token) {
-          throw new Error("Google token exchange returned empty access token");
-        }
-        setGoogleAccessToken(token.access_token);
+      .then(() => {
         setStatus("Google Calendar connected. Redirecting to Meetings...");
         setTimeout(() => router.push("/meetings"), 700);
       })
@@ -48,11 +43,11 @@ function GoogleCallbackContent() {
         setError(message);
         setStatus("Authorization failed");
       });
-  }, [router, searchParams, setGoogleAccessToken]);
+  }, [router, searchParams]);
 
   return (
-    <div className="grid min-h-[72vh] place-items-center">
-      <Card className="w-full max-w-xl space-y-3">
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="grid min-h-[72vh] place-items-center">
+      <Card className="w-full max-w-xl space-y-3 rounded-2xl border border-border/75 bg-card/95 p-6">
         <CardTitle>Google Calendar Setup</CardTitle>
         <CardDescription>{status}</CardDescription>
         {error ? <p className="text-sm text-error">{error}</p> : null}
@@ -60,7 +55,7 @@ function GoogleCallbackContent() {
           <Button variant="outline" onClick={() => router.push("/meetings")}>Back to Meetings</Button>
         </div>
       </Card>
-    </div>
+    </motion.div>
   );
 }
 
@@ -69,7 +64,7 @@ export default function GoogleCallbackPage() {
     <Suspense
       fallback={
         <div className="grid min-h-[72vh] place-items-center">
-          <Card className="w-full max-w-xl space-y-3">
+          <Card className="w-full max-w-xl space-y-3 rounded-2xl border border-border/75 bg-card/95 p-6">
             <CardTitle>Google Calendar Setup</CardTitle>
             <CardDescription>Completing Google sign-in...</CardDescription>
           </Card>
