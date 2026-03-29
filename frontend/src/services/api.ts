@@ -1,5 +1,6 @@
 import axios from "axios";
 import { authCookies } from "@/lib/cookies";
+import { useSessionStore } from "@/store/useSessionStore";
 import { toast } from "sonner";
 
 function normalizeErrorMessage(value: unknown): string {
@@ -44,6 +45,20 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+
+  const session = useSessionStore.getState();
+  const mode = session.activeMode;
+  const user = session.user;
+  const userRoles = new Set(user?.roles ?? (user?.role ? [user.role] : []));
+  const isManagerCapable = userRoles.has("manager") || user?.role === "manager";
+
+  // x-user-mode is only valid for manager accounts switching between manager/employee contexts.
+  if (mode && isManagerCapable) {
+    config.headers["x-user-mode"] = mode;
+  } else if (config.headers && "x-user-mode" in config.headers) {
+    delete config.headers["x-user-mode"];
+  }
+
   return config;
 });
 

@@ -116,4 +116,20 @@ body {
   .app-shell-surface {
     @apply rounded-2xl border border-border/80 bg-card/90 shadow-sm backdrop-blur;
   }
+
+  .dashboard-dropdown-root {
+    @apply relative z-50 overflow-visible;
+  }
+
+  .dashboard-dropdown-menu {
+    @apply fixed z-[9999];
+  }
+
+  .dashboard-layer-top {
+    @apply relative z-50;
+  }
+
+  .dashboard-layer-base {
+    @apply relative z-10;
+  }
 }

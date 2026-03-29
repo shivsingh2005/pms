@@ -1,16 +1,21 @@
 import { api } from "@/services/api";
 import type { User, UserRole } from "@/types";
 
-interface RoleLoginPayload {
-  role: UserRole;
-  email?: string;
-  name?: string;
+interface LoginPayload {
+  email: string;
 }
 
 interface TokenResponse {
   access_token: string;
   refresh_token: string;
   token_type: string;
+  user: {
+    id: string;
+    name: string;
+    role: UserRole;
+    email?: string;
+    roles?: UserRole[];
+  };
 }
 
 interface RefreshResponse {
@@ -39,8 +44,9 @@ interface GoogleConnectionStatusResponse {
 }
 
 export const authService = {
-  async roleLogin(payload: RoleLoginPayload) {
-    const { data } = await api.post<TokenResponse>("/auth/role-login", payload);
+  async login(payload: LoginPayload) {
+    const cleanedEmail = payload.email.trim().toLowerCase();
+    const { data } = await api.post<TokenResponse>("/auth/login", { email: cleanedEmail });
     return data;
   },
   async me() {
@@ -53,8 +59,10 @@ export const authService = {
     });
     return data;
   },
-  async getGoogleAuthorizeUrl() {
-    const { data } = await api.get<GoogleAuthorizeResponse>("/auth/google/authorize");
+  async getGoogleAuthorizeUrl(redirectTo = "/meetings") {
+    const { data } = await api.get<GoogleAuthorizeResponse>("/auth/google/authorize", {
+      params: { redirect_to: redirectTo },
+    });
     return data;
   },
   async exchangeGoogleCode(payload: GoogleTokenExchangePayload) {

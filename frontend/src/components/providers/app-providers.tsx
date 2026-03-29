@@ -13,6 +13,11 @@ const AIChatWidget = dynamic(
 export function AppProviders({ children }: { children: React.ReactNode }) {
   useAuthBootstrap();
   const user = useSessionStore((state) => state.user);
+  const isAuthLoading = useSessionStore((state) => state.isAuthLoading);
+
+  if (isAuthLoading) {
+    return <div>Loading...</div>;
+  }
 
   return (
     <>

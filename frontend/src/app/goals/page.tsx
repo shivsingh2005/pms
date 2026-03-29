@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { FieldErrors, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion } from "framer-motion";
-import { Target } from "lucide-react";
+import { Sparkles, Target } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,10 @@ import { GoalCard } from "@/components/goals/GoalCard";
 import { GoalTimeline } from "@/components/goals/GoalTimeline";
 import { SectionContainer } from "@/components/layout/SectionContainer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { aiService } from "@/services/ai";
 import { useGoalsStore } from "@/store/useGoalsStore";
+import { useSessionStore } from "@/store/useSessionStore";
+import type { AIGeneratedGoal } from "@/types";
 import { toast } from "sonner";
 
 function extractErrorMessage(error: unknown): string {
@@ -51,6 +54,13 @@ type FormValues = z.infer<typeof schema>;
 
 export default function GoalsPage() {
   const { goals, loading, fetchGoals, addGoal, submitGoal } = useGoalsStore();
+  const user = useSessionStore((s) => s.user);
+  const activeMode = useSessionStore((s) => s.activeMode);
+  const isManagerMode = activeMode === "manager";
+  const canManagerCreateGoals = Boolean(user && user.role === "manager" && isManagerMode);
+  const [aiGoals, setAiGoals] = useState<AIGeneratedGoal[]>([]);
+  const [aiContext, setAiContext] = useState<{ title: string; department: string; teamSize: number; focusArea: string } | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { title: "", description: "", weightage: 25, progress: 0, framework: "OKR" },
@@ -76,19 +86,107 @@ export default function GoalsPage() {
     toast.error(typeof message === "string" ? message : "Please fix form validation errors before creating the goal");
   };
 
+  const generateAIGoals = async () => {
+    if (!user?.id) {
+      toast.error("Please sign in to generate AI goals");
+      return;
+    }
+
+    setAiLoading(true);
+    try {
+      const response = await aiService.generateGoalsForUser({ user_id: user.id });
+      setAiGoals(response.goals || []);
+      setAiContext({
+        title: response.title,
+        department: response.department,
+        teamSize: response.team_size,
+        focusArea: response.focus_area,
+      });
+      toast.success("AI goals generated based on role and team context");
+    } catch {
+      toast.error("Unable to generate AI goals");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const updateAIGoal = (index: number, field: keyof AIGeneratedGoal, value: string | number) => {
+    setAiGoals((prev) => prev.map((goal, idx) => (idx === index ? { ...goal, [field]: value } : goal)));
+  };
+
+  const createGoalFromSuggestion = async (goal: AIGeneratedGoal) => {
+    await addGoal({
+      title: goal.title,
+      description: `${goal.description}\n\nKPI: ${goal.kpi}`,
+      weightage: goal.weightage,
+      progress: 0,
+      framework: "OKR",
+    });
+    toast.success("AI goal added to your goals");
+  };
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-7">
       <PageHeader
-        title="Goals"
-        description="Plan measurable outcomes, track progress, and submit goals for approval."
+        title={isManagerMode ? "Team Goals" : "My Goals"}
+        description={
+          isManagerMode
+            ? "Review direct-report goals and approve submitted plans."
+            : "Plan measurable outcomes, track progress, and submit goals for approval."
+        }
         action={
-          <Button onClick={() => document.getElementById("create-goal-form")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-            New Goal
-          </Button>
+          <div className="flex items-center gap-2">
+            {canManagerCreateGoals && (
+              <>
+                <Button variant="outline" onClick={generateAIGoals} disabled={aiLoading}>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  {aiLoading ? "Generating..." : "Generate AI Goals"}
+                </Button>
+                <Button onClick={() => document.getElementById("create-goal-form")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                  New Goal
+                </Button>
+              </>
+            )}
+          </div>
         }
       />
 
       <SectionContainer columns="dashboard">
+        {canManagerCreateGoals && aiGoals.length > 0 ? (
+          <Card className="space-y-4 rounded-2xl border border-border/75 bg-card/95 xl:col-span-12">
+            <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+              <Sparkles className="h-3.5 w-3.5" /> Role-based Goal Suggestions
+            </div>
+            <CardTitle>AI Goal Drafts</CardTitle>
+            <CardDescription>
+              {aiContext
+                ? `${aiContext.title} in ${aiContext.department} | Team size: ${aiContext.teamSize} | Focus: ${aiContext.focusArea}`
+                : "Edit suggestions, then add them to your goal plan."}
+            </CardDescription>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {aiGoals.map((goal, idx) => (
+                <div key={`${goal.title}-${idx}`} className="space-y-3 rounded-xl border border-border bg-background/60 p-4">
+                  <Input value={goal.title} onChange={(event) => updateAIGoal(idx, "title", event.target.value)} />
+                  <Textarea value={goal.description} onChange={(event) => updateAIGoal(idx, "description", event.target.value)} />
+                  <Input value={goal.kpi} onChange={(event) => updateAIGoal(idx, "kpi", event.target.value)} placeholder="KPI" />
+                  <Input
+                    type="number"
+                    value={goal.weightage}
+                    onChange={(event) => updateAIGoal(idx, "weightage", Number(event.target.value))}
+                    min={1}
+                    max={100}
+                  />
+                  <Button className="w-full" variant="secondary" onClick={() => createGoalFromSuggestion(goal)}>
+                    Add as Goal
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </Card>
+        ) : null}
+
+        {canManagerCreateGoals && (
         <Card id="create-goal-form" className="space-y-4 rounded-2xl border border-border/75 bg-card/95 xl:col-span-4">
           <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
             <Target className="h-3.5 w-3.5" /> Goal Planning
@@ -144,8 +242,9 @@ export default function GoalsPage() {
             <Button type="submit" className="w-full">Create Goal</Button>
           </form>
         </Card>
+        )}
 
-        <div className="space-y-6 xl:col-span-8">
+        <div className={`space-y-6 ${isManagerMode ? "xl:col-span-12" : "xl:col-span-8"}`}>
           <Card className="rounded-2xl border border-border/75 bg-card/95">
             <CardTitle>Goal Timeline</CardTitle>
             <div className="mt-4">
@@ -154,9 +253,11 @@ export default function GoalsPage() {
           </Card>
 
           <Card className="rounded-2xl border border-border/75 bg-card/95">
-            <CardTitle>My Goals ({goals.length})</CardTitle>
+            <CardTitle>{isManagerMode ? `Team Goals (${goals.length})` : `My Goals (${goals.length})`}</CardTitle>
             <CardDescription>
-              Created goals are listed below with their Goal ID for meeting creation.
+              {isManagerMode
+                ? "Direct-report and manager goals are shown for team review and approvals."
+                : "Created goals are listed below with their Goal ID for meeting creation."}
             </CardDescription>
           </Card>
 

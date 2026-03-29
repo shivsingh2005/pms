@@ -47,6 +47,7 @@ interface MeetingDraft {
   start: string;
   end: string;
   goalId: string;
+  meetingType: "CHECKIN" | "GENERAL" | "REVIEW";
   participants: string;
 }
 
@@ -57,6 +58,7 @@ export default function MeetingsPage() {
   const [description, setDescription] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
+  const [meetingType, setMeetingType] = useState<"CHECKIN" | "GENERAL" | "REVIEW">("GENERAL");
   const [goalId, setGoalId] = useState("");
   const [participants, setParticipants] = useState("");
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -64,19 +66,20 @@ export default function MeetingsPage() {
   const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
   const oauthHandledRef = useRef(false);
 
-  const getCurrentDraft = (): MeetingDraft => ({
+  const getCurrentDraft = useCallback((): MeetingDraft => ({
     title,
     description,
     start,
     end,
     goalId,
+    meetingType,
     participants,
-  });
+  }), [description, end, goalId, meetingType, participants, start, title]);
 
-  const persistDraft = () => {
+  const persistDraft = useCallback(() => {
     if (typeof window === "undefined") return;
     sessionStorage.setItem(MEETING_DRAFT_KEY, JSON.stringify(getCurrentDraft()));
-  };
+  }, [getCurrentDraft]);
 
   const clearDraft = () => {
     if (typeof window === "undefined") return;
@@ -94,7 +97,8 @@ export default function MeetingsPage() {
         description: parsed.description ?? "",
         start: parsed.start ?? "",
         end: parsed.end ?? "",
-        goalId: parsed.goalId ?? "",
+        meetingType: (parsed.meetingType as "CHECKIN" | "GENERAL" | "REVIEW") ?? "GENERAL",
+        goalId: ((parsed.meetingType as "CHECKIN" | "GENERAL" | "REVIEW") ?? "GENERAL") === "CHECKIN" ? parsed.goalId ?? "" : "",
         participants: parsed.participants ?? "",
       };
     } catch {
@@ -107,6 +111,7 @@ export default function MeetingsPage() {
     setDescription(draft.description);
     setStart(draft.start);
     setEnd(draft.end);
+    setMeetingType(draft.meetingType);
     setGoalId(draft.goalId);
     setParticipants(draft.participants);
   };
@@ -137,6 +142,26 @@ export default function MeetingsPage() {
       .catch(() => setGoogleConnected(null));
   }, []);
 
+  useEffect(() => {
+    if (meetingType !== "CHECKIN") {
+      setGoalId("");
+    }
+  }, [meetingType]);
+
+  const connectGoogleCalendar = useCallback(async () => {
+    try {
+      persistDraft();
+      const { authorization_url } = await authService.getGoogleAuthorizeUrl();
+      if (!authorization_url) {
+        toast.error("Google OAuth is not configured on backend");
+        return;
+      }
+      window.location.href = authorization_url;
+    } catch {
+      toast.error("Failed to initialize Google OAuth flow");
+    }
+  }, [persistDraft]);
+
   const submit = useCallback(async (draftOverride?: MeetingDraft) => {
     const source = draftOverride ?? getCurrentDraft();
 
@@ -163,8 +188,8 @@ export default function MeetingsPage() {
       return;
     }
 
-    if (!source.goalId.trim()) {
-      toast.error("Goal ID is required");
+    if (source.meetingType === "CHECKIN" && !source.goalId.trim()) {
+      toast.error("Goal is required for check-in meetings");
       return;
     }
 
@@ -178,16 +203,18 @@ export default function MeetingsPage() {
     try {
       await createMeeting({
         title: source.title.trim(),
+        meeting_type: source.meetingType,
         description: source.description,
         start_time: startDate.toISOString(),
         end_time: endDate.toISOString(),
-        goal_id: source.goalId.trim(),
+        goal_id: source.meetingType === "CHECKIN" ? source.goalId.trim() : undefined,
         participants: participantList,
       });
       setTitle("");
       setDescription("");
       setStart("");
       setEnd("");
+      setMeetingType("GENERAL");
       setGoalId("");
       setParticipants("");
       clearDraft();
@@ -210,7 +237,7 @@ export default function MeetingsPage() {
       }
       toast.error(message);
     }
-  }, [createMeeting, title, description, start, end, goalId, participants]);
+  }, [connectGoogleCalendar, createMeeting, getCurrentDraft, persistDraft]);
 
   useEffect(() => {
     if (oauthHandledRef.current) {
@@ -249,20 +276,6 @@ export default function MeetingsPage() {
 
     router.replace("/meetings");
   }, [router, submit]);
-
-  const connectGoogleCalendar = async () => {
-    try {
-      persistDraft();
-      const { authorization_url } = await authService.getGoogleAuthorizeUrl();
-      if (!authorization_url) {
-        toast.error("Google OAuth is not configured on backend");
-        return;
-      }
-      window.location.href = authorization_url;
-    } catch {
-      toast.error("Failed to initialize Google OAuth flow");
-    }
-  };
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-7">
@@ -315,21 +328,35 @@ export default function MeetingsPage() {
               <Input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Goal</label>
+              <label className="text-sm font-medium text-foreground">Meeting Type</label>
               <select
-                value={goalId}
-                onChange={(e) => setGoalId(e.target.value)}
+                value={meetingType}
+                onChange={(e) => setMeetingType(e.target.value as "CHECKIN" | "GENERAL" | "REVIEW")}
                 className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground"
-                disabled={goalsLoading}
               >
-                <option value="">{goalsLoading ? "Loading goals..." : "Select a goal"}</option>
-                {goals.map((goal) => (
-                  <option key={goal.id} value={goal.id}>
-                    {goal.title}
-                  </option>
-                ))}
+                <option value="GENERAL">General</option>
+                <option value="CHECKIN">Check-in</option>
+                <option value="REVIEW">Review</option>
               </select>
             </div>
+            {meetingType === "CHECKIN" && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Goal</label>
+                <select
+                  value={goalId}
+                  onChange={(e) => setGoalId(e.target.value)}
+                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground"
+                  disabled={goalsLoading}
+                >
+                  <option value="">{goalsLoading ? "Loading goals..." : "Select a goal"}</option>
+                  {goals.map((goal) => (
+                    <option key={goal.id} value={goal.id}>
+                      {goal.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Participants</label>
               <Input placeholder="email1@company.com, email2@company.com" value={participants} onChange={(e) => setParticipants(e.target.value)} />

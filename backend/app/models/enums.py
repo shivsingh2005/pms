@@ -23,8 +23,9 @@ class GoalFramework(str, Enum):
 
 
 class CheckinStatus(str, Enum):
-    scheduled = "scheduled"
-    completed = "completed"
+    draft = "draft"
+    submitted = "submitted"
+    reviewed = "reviewed"
 
 
 class RatingLabel(str, Enum):
@@ -39,3 +40,16 @@ class MeetingStatus(str, Enum):
     scheduled = "scheduled"
     completed = "completed"
     cancelled = "cancelled"
+
+
+class MeetingType(str, Enum):
+    CHECKIN = "CHECKIN"
+    GENERAL = "GENERAL"
+    HR = "HR"
+    REVIEW = "REVIEW"
+
+
+class MeetingProposalStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"

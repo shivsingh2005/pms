@@ -18,6 +18,40 @@ class AIGoalSuggestResponse(BaseModel):
     goals: list[AIGoalItem]
 
 
+class AIGoalGenerateRequest(BaseModel):
+    user_id: str
+    organization_objectives: str | None = None
+
+
+class AIGoalGenerateResponse(BaseModel):
+    user_id: str
+    title: str
+    department: str
+    team_size: int
+    focus_area: str
+    goals: list[AIGoalItem]
+
+
+class AITeamGoalGenerateRequest(BaseModel):
+    manager_id: str
+    organization_objectives: str | None = None
+
+
+class AITeamGoalEmployeeBundle(BaseModel):
+    employee_id: str
+    employee_name: str
+    role: str
+    department: str
+    current_workload: float
+    goals: list[AIGoalItem]
+
+
+class AITeamGoalGenerateResponse(BaseModel):
+    manager_id: str
+    team_structure: list[str]
+    employees: list[AITeamGoalEmployeeBundle]
+
+
 class AICheckinSummarizeRequest(BaseModel):
     meeting_transcript: str = Field(min_length=10)
 

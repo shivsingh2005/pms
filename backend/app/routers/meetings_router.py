@@ -8,6 +8,9 @@ from app.schemas.meeting import (
     AvailabilityResponse,
     MeetingAISummaryResponse,
     MeetingCreateRequest,
+    MeetingProposalOut,
+    MeetingProposalRejectRequest,
+    MeetingProposalRescheduleRequest,
     MeetingsAnalyticsResponse,
     MeetingOut,
     MeetingUpdateRequest,
@@ -121,3 +124,60 @@ async def summarize_meeting(
     service = MeetService()
     payload = await service.summarize_meeting(meeting_id, current_user, db)
     return MeetingAISummaryResponse(**payload)
+
+
+@router.get("/meetings/proposals/pending", response_model=list[MeetingProposalOut])
+async def list_pending_meeting_proposals(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[MeetingProposalOut]:
+    service = MeetService()
+    proposals = await service.list_pending_proposals(current_user, db)
+    return [MeetingProposalOut.model_validate(proposal) for proposal in proposals]
+
+
+@router.post("/meetings/proposal/{proposal_id}/approve", response_model=MeetingOut)
+async def approve_meeting_proposal(
+    proposal_id: str,
+    current_user: User = Depends(get_current_user),
+    google_access_token: str = Depends(get_google_access_token),
+    db: AsyncSession = Depends(get_db),
+) -> MeetingOut:
+    service = MeetService(google_access_token)
+    _, meeting = await service.approve_proposal(proposal_id, current_user, db)
+    return MeetingOut.model_validate(meeting)
+
+
+@router.post("/meetings/proposal/{proposal_id}/reject", response_model=MeetingProposalOut)
+async def reject_meeting_proposal(
+    proposal_id: str,
+    payload: MeetingProposalRejectRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeetingProposalOut:
+    service = MeetService()
+    proposal = await service.reject_proposal(
+        proposal_id,
+        current_user,
+        db,
+        suggest_new_start_time=payload.suggest_new_start_time,
+    )
+    return MeetingProposalOut.model_validate(proposal)
+
+
+@router.patch("/meetings/proposal/{proposal_id}/reschedule", response_model=MeetingProposalOut)
+async def reschedule_meeting_proposal(
+    proposal_id: str,
+    payload: MeetingProposalRescheduleRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeetingProposalOut:
+    service = MeetService()
+    proposal = await service.reschedule_proposal(
+        proposal_id,
+        current_user,
+        db,
+        proposed_start_time=payload.proposed_start_time,
+        proposed_end_time=payload.proposed_end_time,
+    )
+    return MeetingProposalOut.model_validate(proposal)

@@ -1,19 +1,29 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from uuid import UUID
 from app.models.enums import UserRole
 
 
-class RoleLoginRequest(BaseModel):
-    role: UserRole = UserRole.employee
+class EmailLoginRequest(BaseModel):
+    email: EmailStr
+
+
+class LoginUserResponse(BaseModel):
+    id: UUID
+    name: str
+    role: UserRole
     email: EmailStr | None = None
-    name: str | None = None
-    organization_domain: str | None = None
+    roles: list[UserRole] = Field(default_factory=list)
 
 
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    user: LoginUserResponse
+    user_id: UUID | None = None
+    name: str | None = None
+    role: UserRole | None = None
+    roles: list[UserRole] = Field(default_factory=list)
 
 
 class RefreshRequest(BaseModel):
@@ -45,6 +55,7 @@ class AuthUserResponse(BaseModel):
     email: EmailStr
     name: str
     role: UserRole
+    roles: list[UserRole] = Field(default_factory=list)
     organization_id: UUID
 
     model_config = {"from_attributes": True}

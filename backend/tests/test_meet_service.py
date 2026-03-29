@@ -6,19 +6,21 @@ from app.integrations.google.meet_service import MeetService
 from app.models.enums import UserRole
 
 
-def test_validate_create_role_allows_employee_and_manager():
+def test_validate_create_role_allows_employee_manager_and_hr():
     employee = SimpleNamespace(role=UserRole.employee)
     manager = SimpleNamespace(role=UserRole.manager)
+    hr_user = SimpleNamespace(role=UserRole.hr)
 
     MeetService._validate_create_role(employee)
     MeetService._validate_create_role(manager)
+    MeetService._validate_create_role(hr_user)
 
 
-def test_validate_create_role_blocks_hr():
-    hr_user = SimpleNamespace(role=UserRole.hr)
+def test_validate_create_role_blocks_leadership():
+    leadership_user = SimpleNamespace(role=UserRole.leadership)
 
     with pytest.raises(HTTPException) as exc:
-        MeetService._validate_create_role(hr_user)
+        MeetService._validate_create_role(leadership_user)
 
     assert exc.value.status_code == 403
 

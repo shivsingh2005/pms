@@ -16,6 +16,10 @@ from app.schemas.ai import (
     AIFeedbackCoachResponse,
     AIGoalSuggestRequest,
     AIGoalSuggestResponse,
+    AIGoalGenerateRequest,
+    AIGoalGenerateResponse,
+    AITeamGoalGenerateRequest,
+    AITeamGoalGenerateResponse,
     AIGrowthSuggestRequest,
     AIGrowthSuggestResponse,
     AIReviewGenerateRequest,
@@ -76,6 +80,52 @@ async def suggest_goals(
             db,
         )
         return AIGoalSuggestResponse(**output)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+
+
+@router.post("/goals/generate", response_model=AIGoalGenerateResponse)
+@limiter.limit(settings.AI_RATE_LIMIT_DEFAULT)
+async def generate_goals(
+    request: Request,
+    payload: AIGoalGenerateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AIGoalGenerateResponse:
+    service = _build_ai_service()
+    try:
+        output = await service.generate_role_based_goals(
+            requester=current_user,
+            target_user_id=payload.user_id,
+            organization_objectives=payload.organization_objectives,
+            db=db,
+        )
+        return AIGoalGenerateResponse(**output)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+
+
+@router.post("/team-goals", response_model=AITeamGoalGenerateResponse)
+@limiter.limit(settings.AI_RATE_LIMIT_DEFAULT)
+async def generate_team_goals(
+    request: Request,
+    payload: AITeamGoalGenerateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AITeamGoalGenerateResponse:
+    service = _build_ai_service()
+    try:
+        output = await service.generate_team_goals(
+            requester=current_user,
+            manager_id=payload.manager_id,
+            organization_objectives=payload.organization_objectives,
+            db=db,
+        )
+        return AITeamGoalGenerateResponse(**output)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except RuntimeError as exc:

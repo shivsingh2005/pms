@@ -5,9 +5,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Bell,
-  CalendarCheck,
-  ClipboardList,
-  LayoutDashboard,
   LogOut,
   Menu,
   Moon,
@@ -16,24 +13,20 @@ import {
   Search,
   Sparkles,
   Sun,
-  Target,
-  Video,
   X,
 } from "lucide-react";
 import { authCookies } from "@/lib/cookies";
 import { useSessionStore } from "@/store/useSessionStore";
+import type { UserRole } from "@/types";
 import { cn } from "@/lib/utils";
-import { SidebarItem } from "@/components/navigation/SidebarItem";
+import { EmployeeSidebar } from "@/components/navigation/EmployeeSidebar";
+import { ManagerSidebar } from "@/components/navigation/ManagerSidebar";
+import { HRSidebar } from "@/components/navigation/HRSidebar";
+import { LeadershipSidebar } from "@/components/navigation/LeadershipSidebar";
+import { AdminSidebar } from "@/components/navigation/AdminSidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-const nav = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/goals", label: "Goals", icon: Target },
-  { href: "/checkins", label: "Check-ins", icon: CalendarCheck },
-  { href: "/meetings", label: "Meetings", icon: Video },
-  { href: "/reviews", label: "Reviews", icon: ClipboardList },
-];
+import { isAuthFreePath, isPathAllowedForRole, resolveDefaultRouteForRole } from "@/lib/role-access";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -44,8 +37,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const user = useSessionStore((s) => s.user);
+  const activeMode = useSessionStore((s) => s.activeMode);
+  const setActiveMode = useSessionStore((s) => s.setActiveMode);
   const logout = useSessionStore((s) => s.logout);
   const withAppShell = Boolean(user);
+  const hasManagerRole = user?.role === "manager";
+
+  const canSwitchMode = hasManagerRole;
+  const effectiveRole: UserRole | null = user
+    ? (hasManagerRole ? activeMode ?? "manager" : user.role)
+    : null;
+  const homeHref = effectiveRole ? resolveDefaultRouteForRole(effectiveRole) : "/";
 
   useEffect(() => {
     const saved = typeof window !== "undefined" ? localStorage.getItem("pms-theme") : null;
@@ -56,6 +58,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const collapsed = typeof window !== "undefined" ? localStorage.getItem("pms-sidebar-collapsed") : null;
     setSidebarCollapsed(collapsed === "true");
   }, []);
+
+  useEffect(() => {
+    if (hasManagerRole && !activeMode) {
+      setActiveMode("manager");
+    }
+  }, [activeMode, hasManagerRole, setActiveMode]);
 
   const toggleTheme = () => {
     const next = !dark;
@@ -95,6 +103,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setUserMenuOpen(false);
   }, [pathname]);
 
+  useEffect(() => {
+    if (!user || !effectiveRole) {
+      return;
+    }
+
+    if (!isPathAllowedForRole(pathname, effectiveRole)) {
+      router.replace(resolveDefaultRouteForRole(effectiveRole));
+    }
+  }, [effectiveRole, pathname, router, user]);
+
+  useEffect(() => {
+    if (!user && !isAuthFreePath(pathname)) {
+      router.replace("/");
+    }
+  }, [pathname, router, user]);
+
   const initials =
     user?.name
       ?.split(" ")
@@ -103,23 +127,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .map((item) => item[0]?.toUpperCase())
       .join("") ?? "U";
 
-  const sidebarLinks = (
-    <div className="space-y-1 px-3">
-      {nav.map((item) => {
-        const active = pathname === item.href;
-        return (
-          <SidebarItem
-            key={item.href}
-            href={item.href}
-            label={item.label}
-            active={active}
-            icon={item.icon}
-            collapsed={sidebarCollapsed}
-          />
-        );
-      })}
-    </div>
-  );
+  const sidebarLinks =
+    effectiveRole === "employee" ? (
+      <EmployeeSidebar pathname={pathname} collapsed={sidebarCollapsed} />
+    ) : effectiveRole === "manager" ? (
+      <ManagerSidebar pathname={pathname} collapsed={sidebarCollapsed} />
+    ) : effectiveRole === "hr" ? (
+      <HRSidebar pathname={pathname} collapsed={sidebarCollapsed} />
+    ) : effectiveRole === "leadership" ? (
+      <LeadershipSidebar pathname={pathname} collapsed={sidebarCollapsed} />
+    ) : (
+      <AdminSidebar pathname={pathname} collapsed={sidebarCollapsed} />
+    );
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -127,7 +146,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <>
           <aside className={cn("fixed inset-y-0 left-0 z-40 hidden border-r border-gray-200 bg-card/95 backdrop-blur transition-all duration-200 dark:border-gray-800 lg:flex lg:flex-col", sidebarCollapsed ? "w-20" : "w-64")}>
             <div className={cn("flex h-16 items-center border-b border-border/70", sidebarCollapsed ? "justify-center px-2" : "px-5")}>
-              <Link href="/dashboard" className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
+              <Link href={homeHref} className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
                 <span className="rounded-xl border border-primary/20 bg-primary/15 p-1.5 text-primary shadow-card">
                   <Sparkles className="h-4 w-4" aria-hidden="true" />
                 </span>
@@ -141,7 +160,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               ) : (
                 <div className="rounded-xl border border-border/70 bg-surface/65 p-3">
                   <p className="truncate text-sm font-medium text-foreground">{user?.name}</p>
-                  <p className="truncate text-xs uppercase tracking-wide text-muted-foreground">{user?.role}</p>
+                  <p className="truncate text-xs uppercase tracking-wide text-muted-foreground">{effectiveRole ?? user?.role}</p>
                 </div>
               )}
             </div>
@@ -157,7 +176,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               />
               <aside className="relative z-10 flex h-full w-64 flex-col border-r border-gray-200 bg-card dark:border-gray-800">
                 <div className="flex h-16 items-center justify-between border-b border-border/70 px-4">
-                  <Link href="/dashboard" className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Link href={homeHref} className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
                     <span className="rounded-xl border border-primary/20 bg-primary/15 p-1.5 text-primary">
                       <Sparkles className="h-4 w-4" />
                     </span>
@@ -188,13 +207,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
 
               <div className="flex items-center gap-1.5">
+                {canSwitchMode && effectiveRole && (
+                  <div className="hidden items-center gap-2 md:flex">
+                    <span className="text-xs text-muted-foreground">Switch View</span>
+                    <select
+                      className="h-9 rounded-md border border-input bg-card px-2 text-sm text-foreground"
+                      value={effectiveRole}
+                      onChange={(event) => {
+                        const mode = event.target.value as "employee" | "manager";
+                        setActiveMode(mode);
+                        router.push(mode === "manager" ? "/manager/dashboard" : "/employee/dashboard");
+                      }}
+                    >
+                      <option value="manager">Manager Mode</option>
+                      <option value="employee">Employee Mode</option>
+                    </select>
+                  </div>
+                )}
                 <Button variant="ghost" size="sm" className="h-9 w-9 rounded-full p-0" aria-label="Notifications">
                   <Bell className="h-4 w-4" />
                 </Button>
                 <Button variant="secondary" size="sm" onClick={toggleTheme} className="h-9 w-9 rounded-full p-0" aria-label="Toggle theme">
                   {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 </Button>
-                <div className="relative" ref={userMenuRef}>
+                <div className="dashboard-dropdown-root" ref={userMenuRef}>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -206,7 +242,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     </span>
                   </Button>
                   {userMenuOpen && (
-                    <div className="absolute right-0 top-11 w-56 rounded-2xl border border-border/80 bg-card p-2.5 shadow-floating">
+                    <div className="absolute right-0 top-11 z-[9999] w-56 rounded-2xl border border-border/80 bg-card p-2.5 shadow-floating">
                       <div className="px-2 py-2">
                         <p className="truncate text-sm font-medium text-foreground">{user?.name}</p>
                         <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
@@ -226,7 +262,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <main className={cn("min-h-screen", withAppShell ? (sidebarCollapsed ? "pt-16 lg:pl-20" : "pt-16 lg:pl-64") : "") }>
         <div className={cn(withAppShell ? "h-[calc(100vh-4rem)] overflow-y-auto" : "")}>
-          <div className="mx-auto w-full max-w-7xl px-6 py-6">{children}</div>
+          <div className="mx-auto w-full max-w-7xl px-6 py-6 space-y-3">
+            {canSwitchMode && effectiveRole && (
+              <div className="inline-flex rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+                Viewing as {effectiveRole === "manager" ? "Manager" : "Employee"}
+              </div>
+            )}
+            {children}
+          </div>
         </div>
       </main>
     </div>
