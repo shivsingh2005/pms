@@ -23,9 +23,10 @@ export default function HRDashboardPage() {
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
       <PageHeader
         title="HR Dashboard"
-        description="Organization monitoring center for directory, analytics, calibration, reporting, and risk analysis."
+        description="Snapshot for org health and urgent people actions. Use HR Analytics for trends and deep dive charts."
       />
       <HRDashboard />
     </motion.div>
   );
 }
+

@@ -14,7 +14,7 @@ router = APIRouter(prefix="/ratings", tags=["Ratings"])
 @router.post("", response_model=RatingOut)
 async def submit_rating(
     payload: RatingCreate,
-    manager: User = Depends(require_roles(UserRole.manager, UserRole.hr, UserRole.admin)),
+    manager: User = Depends(require_roles(UserRole.manager, UserRole.hr)),
     db: AsyncSession = Depends(get_db),
 ) -> RatingOut:
     rating = await RatingService.submit(manager, payload, db)
@@ -33,7 +33,7 @@ async def list_ratings(
 @router.get("/weighted-score/{employee_id}", response_model=WeightedScoreOut)
 async def get_weighted_score(
     employee_id: str,
-    _: User = Depends(require_roles(UserRole.manager, UserRole.hr, UserRole.admin, UserRole.leadership)),
+    _: User = Depends(require_roles(UserRole.manager, UserRole.hr, UserRole.leadership)),
     db: AsyncSession = Depends(get_db),
 ) -> WeightedScoreOut:
     score = await RatingService.weighted_score(employee_id, db)

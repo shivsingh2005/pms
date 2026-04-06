@@ -1,21 +1,17 @@
 import type { UserRole } from "@/types";
 
 export function resolveDefaultRouteForRole(role: UserRole): string {
-  if (role === "employee") return "/employee-dashboard";
-  if (role === "manager") return "/manager-dashboard";
-  if (role === "hr") return "/hr-dashboard";
-  if (role === "leadership") return "/leadership/org-dashboard";
-  return "/admin/dashboard";
+  if (role === "employee") return "/employee/dashboard";
+  if (role === "manager") return "/manager/dashboard";
+  if (role === "hr") return "/hr/dashboard";
+  return "/leadership/dashboard";
 }
 
-const commonPrefixes = ["/dashboard", "/goals", "/checkins", "/meetings", "/reviews"];
-
 const roleRoutePrefixes: Record<UserRole, string[]> = {
-  employee: ["/employee", "/employee-dashboard", ...commonPrefixes],
-  manager: ["/manager", "/manager-dashboard", ...commonPrefixes],
-  hr: ["/hr", "/hr-dashboard", ...commonPrefixes],
-  leadership: ["/leadership", ...commonPrefixes],
-  admin: ["/admin", ...commonPrefixes],
+  employee: ["/employee", "/employee-dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
+  manager: ["/manager", "/manager-dashboard", "/employee", "/employee-dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
+  hr: ["/hr", "/hr-dashboard"],
+  leadership: ["/leadership", "/dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
 };
 
 const authFreeRoutes = ["/", "/auth", "/unauthorized"];

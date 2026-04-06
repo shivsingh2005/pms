@@ -28,3 +28,28 @@ class ReviewOut(BaseModel):
 class ReviewAnalyticsOut(BaseModel):
     total_reviews: int
     avg_rating: float
+
+
+class ReviewNarrativeRequest(BaseModel):
+    period: str = Field(default="quarter", pattern="^(quarter|year)$")
+    cycle_year: int | None = Field(default=None, ge=2000, le=2100)
+    cycle_quarter: int | None = Field(default=None, ge=1, le=4)
+    manager_comments: str = Field(default="")
+
+
+class ReviewNarrativeExplainabilityOut(BaseModel):
+    scope: str
+    review_count: int
+    source_review_ids: list[UUID]
+    filters: dict[str, int | str | None]
+
+
+class ReviewNarrativeOut(BaseModel):
+    period: str
+    cycle_year: int | None
+    cycle_quarter: int | None
+    performance_summary: str
+    strengths: list[str]
+    weaknesses: list[str]
+    growth_plan: list[str]
+    explainability: ReviewNarrativeExplainabilityOut

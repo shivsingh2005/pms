@@ -679,7 +679,7 @@ export default function HRMeetingsPage() {
               <div className="flex flex-wrap gap-2">
                 {participantChips.length === 0 ? <span className="text-xs text-muted-foreground">No participants selected</span> : null}
                 {participantChips.map((chip) => (
-                  <Badge key={chip} variant="outline">{chip}</Badge>
+                  <Badge key={chip} className="border-border bg-transparent text-foreground ring-0">{chip}</Badge>
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">Invites will be sent to: {participantPreview.join(", ") || "No participants"}</p>
@@ -766,3 +766,4 @@ export default function HRMeetingsPage() {
     </motion.div>
   );
 }
+

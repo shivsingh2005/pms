@@ -12,7 +12,7 @@ export function ConsistencyChart({ data }: ConsistencyChartProps) {
     <ChartCard
       title="Check-in Consistency"
       description="Check-ins recorded per week"
-      className="rounded-2xl border border-border/75 bg-card/95"
+      className="rounded-xl border border-border bg-card"
     >
       <MetricChart kind="bar" data={data} xKey="week" yKey="value" color="hsl(var(--success))" />
     </ChartCard>

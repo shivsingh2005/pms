@@ -2,7 +2,7 @@ import json
 import urllib.request
 
 base = 'http://127.0.0.1:8000/api/v1'
-roles = ['admin', 'hr', 'manager', 'employee', 'leadership']
+roles = ['hr', 'manager', 'employee', 'leadership']
 
 
 def post(path, payload, headers=None):
@@ -27,10 +27,7 @@ for role in roles:
     token = login['data']['access_token']
     headers = {'Authorization': f'Bearer {token}'}
 
-    if role == 'admin':
-        res = get('/admin/dashboard', headers)
-        print('admin_total_employees=', res['data']['metrics']['total_employees'])
-    elif role == 'hr':
+    if role == 'hr':
         res = get('/hr/overview', headers)
         print('hr_total_employees=', res['data']['total_employees'])
     elif role == 'manager':

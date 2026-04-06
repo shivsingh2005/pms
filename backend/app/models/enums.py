@@ -6,7 +6,6 @@ class UserRole(str, Enum):
     manager = "manager"
     hr = "hr"
     leadership = "leadership"
-    admin = "admin"
 
 
 class GoalStatus(str, Enum):
@@ -53,3 +52,10 @@ class MeetingProposalStatus(str, Enum):
     pending = "pending"
     approved = "approved"
     rejected = "rejected"
+
+
+class PerformanceCycleStatus(str, Enum):
+    planning = "planning"
+    active = "active"
+    closed = "closed"
+    locked = "locked"

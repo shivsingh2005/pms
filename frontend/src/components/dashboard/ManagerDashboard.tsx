@@ -1,36 +1,114 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { ArrowRight, Users } from "lucide-react";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
-import { dashboardService, type DashboardOverview } from "@/services/dashboard";
 import { managerService } from "@/services/manager";
-import { checkinsService } from "@/services/checkins";
-import { goalsService } from "@/services/goals";
 import type { ManagerTeamMember } from "@/types";
-import type { ManagerPendingCheckin } from "@/types";
-import type { Goal } from "@/types";
+import type { ManagerTeamPerformancePayload } from "@/types";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { toast } from "sonner";
+import { StatCard } from "@/components/dashboard/StatCard";
 import { useSessionStore } from "@/store/useSessionStore";
+
+const DEFAULT_MANAGER_DASHBOARD: ManagerTeamPerformancePayload = {
+  team_size: 0,
+  avg_performance: 0,
+  avg_progress: 0,
+  completed_goals: 0,
+  consistency: 0,
+  at_risk: 0,
+  message: "No team data available.",
+  trend: [],
+  distribution: [
+    { label: "EE", count: 0 },
+    { label: "DE", count: 0 },
+    { label: "ME", count: 0 },
+    { label: "SME", count: 0 },
+    { label: "NI", count: 0 },
+  ],
+  workload: [],
+  performers: {
+    top: [],
+    low: [],
+  },
+  top_performers: [],
+  low_performers: [],
+  team: [],
+  insights: ["No performance signals available yet."],
+};
+
+function buildFallbackDashboard(team: ManagerTeamMember[]): ManagerTeamPerformancePayload {
+  if (!team.length) {
+    return DEFAULT_MANAGER_DASHBOARD;
+  }
+
+  const normalizedTeam = team.map((member) => ({
+    employee_id: member.id,
+    employee_name: member.name,
+    progress: member.goal_progress_percent,
+    rating: member.avg_final_rating,
+    consistency: member.consistency_percent,
+  }));
+  const avgProgress = normalizedTeam.reduce((sum, member) => sum + member.progress, 0) / normalizedTeam.length;
+  const avgConsistency = normalizedTeam.reduce((sum, member) => sum + member.consistency, 0) / normalizedTeam.length;
+  const avgRating = normalizedTeam.reduce((sum, member) => sum + member.rating, 0) / normalizedTeam.length;
+  const top = [...normalizedTeam].sort((a, b) => b.progress - a.progress).slice(0, 3);
+  const low = [...normalizedTeam].sort((a, b) => a.progress - b.progress).slice(0, 3);
+
+  return {
+    team_size: normalizedTeam.length,
+    avg_performance: Number(avgRating.toFixed(2)),
+    avg_progress: Number(avgProgress.toFixed(1)),
+    completed_goals: team.reduce((sum, member) => sum + member.current_goals_count, 0),
+    consistency: Number(avgConsistency.toFixed(1)),
+    at_risk: normalizedTeam.filter((member) => member.progress < 50 || member.rating <= 2).length,
+    message: "Showing computed fallback from team snapshot.",
+    trend: [],
+    distribution: [
+      { label: "EE", count: 0 },
+      { label: "DE", count: 0 },
+      { label: "ME", count: 0 },
+      { label: "SME", count: 0 },
+      { label: "NI", count: 0 },
+    ],
+    workload: team.map((member) => ({
+      employee_id: member.id,
+      employee_name: member.name,
+      total_weightage: member.current_workload,
+    })),
+    performers: { top, low },
+    top_performers: top,
+    low_performers: low,
+    team: normalizedTeam,
+    insights: ["Fallback mode active: displaying team-derived dashboard metrics."],
+  };
+}
 
 export function ManagerDashboard() {
   const user = useSessionStore((state) => state.user);
   const activeMode = useSessionStore((state) => state.activeMode);
-  const [overview, setOverview] = useState<DashboardOverview | null>(null);
+  const setActiveMode = useSessionStore((state) => state.setActiveMode);
+  const [dashboardData, setDashboardData] = useState<ManagerTeamPerformancePayload | null>(null);
   const [team, setTeam] = useState<ManagerTeamMember[]>([]);
-  const [pendingCheckins, setPendingCheckins] = useState<ManagerPendingCheckin[]>([]);
-  const [pendingGoals, setPendingGoals] = useState<Goal[]>([]);
+  const [pendingCheckinsCount, setPendingCheckinsCount] = useState(0);
   const [pendingProposalsCount, setPendingProposalsCount] = useState(0);
-  const [feedbackByCheckin, setFeedbackByCheckin] = useState<Record<string, string>>({});
+  const [pendingGoalsCount, setPendingGoalsCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user || activeMode !== "manager") {
-      setOverview(null);
+    if (user?.role === "manager" && activeMode !== "manager") {
+      setActiveMode("manager");
+    }
+  }, [activeMode, setActiveMode, user]);
+
+  useEffect(() => {
+    if (!user || user.role !== "manager" || activeMode !== "manager") {
+      setDashboardData(null);
       setTeam([]);
-      setPendingCheckins([]);
-      setPendingGoals([]);
+      setPendingCheckinsCount(0);
+      setPendingGoalsCount(0);
       setPendingProposalsCount(0);
       return;
     }
@@ -38,47 +116,68 @@ export function ManagerDashboard() {
     let cancelled = false;
     setLoading(true);
 
+    const managerId = user.id;
     Promise.allSettled([
-      dashboardService.getOverview(),
-      managerService.getTeam(),
-      managerService.getPendingCheckins(),
-      goalsService.getGoals(),
-      managerService.getPendingMeetingProposals(),
+      managerService.getDashboard(managerId, { silent: true }),
+      managerService.getTeam({ silent: true }),
     ])
-      .then(([overviewResult, teamResult, pendingCheckinsResult, goalsResult, proposalsResult]) => {
+      .then(([dashboardResult, teamResult]) => {
         if (cancelled) {
           return;
         }
 
-        if (overviewResult.status === "fulfilled") {
-          setOverview(overviewResult.value);
-        } else {
-          setOverview(null);
-        }
-
+        const teamPayload = teamResult.status === "fulfilled" ? teamResult.value : [];
         if (teamResult.status === "fulfilled") {
           setTeam(teamResult.value);
         } else {
           setTeam([]);
         }
 
-        if (pendingCheckinsResult.status === "fulfilled") {
-          setPendingCheckins(pendingCheckinsResult.value);
+        if (dashboardResult.status === "fulfilled") {
+          setDashboardData(dashboardResult.value);
+          setLoadError(null);
         } else {
-          setPendingCheckins([]);
+          // Fallback to legacy manager analytics endpoint if strict dashboard route fails.
+          managerService
+            .getTeamPerformance({ silent: true })
+            .then((fallbackPayload) => {
+              if (cancelled) return;
+              setDashboardData(fallbackPayload);
+              setLoadError(null);
+            })
+            .catch(() => {
+              if (cancelled) return;
+              setDashboardData(buildFallbackDashboard(teamPayload));
+              setLoadError("Live dashboard unavailable. Showing fallback data.");
+            });
         }
 
-        if (goalsResult.status === "fulfilled") {
-          setPendingGoals(goalsResult.value.filter((goal) => goal.status === "submitted"));
-        } else {
-          setPendingGoals([]);
-        }
+        setTimeout(() => {
+          if (cancelled) return;
 
-        if (proposalsResult.status === "fulfilled") {
-          setPendingProposalsCount(proposalsResult.value.length);
-        } else {
-          setPendingProposalsCount(0);
-        }
+          Promise.allSettled([
+            managerService.getPendingCheckins({ silent: true }),
+            managerService.getPendingMeetingProposals({ silent: true }),
+          ]).then(([pendingCheckinsResult, proposalsResult]) => {
+            if (cancelled) return;
+
+            if (pendingCheckinsResult.status === "fulfilled") {
+              setPendingCheckinsCount(pendingCheckinsResult.value.length);
+            } else {
+              setPendingCheckinsCount(0);
+            }
+
+            setPendingGoalsCount(
+              teamPayload.filter((member) => member.status === "At Risk").length,
+            );
+
+            if (proposalsResult.status === "fulfilled") {
+              setPendingProposalsCount(proposalsResult.value.length);
+            } else {
+              setPendingProposalsCount(0);
+            }
+          });
+        }, 120);
       })
       .finally(() => {
         if (!cancelled) {
@@ -91,123 +190,137 @@ export function ManagerDashboard() {
     };
   }, [activeMode, user]);
 
-  const reviewCheckin = async (checkinId: string) => {
-    const feedback = feedbackByCheckin[checkinId]?.trim();
-    if (!feedback) {
-      toast.error("Manager feedback is required");
-      return;
-    }
+  const pendingApprovalsCount = pendingCheckinsCount + pendingGoalsCount + pendingProposalsCount;
 
-    try {
-      await checkinsService.review(checkinId, { manager_feedback: feedback, status: "reviewed" });
-      setPendingCheckins((prev) => prev.filter((item) => item.id !== checkinId));
-      setFeedbackByCheckin((prev) => ({ ...prev, [checkinId]: "" }));
-      toast.success("Check-in reviewed");
-    } catch {
-      toast.error("Failed to review check-in");
-    }
-  };
-
-  const decideGoal = async (goalId: string, action: "approve" | "reject") => {
-    try {
-      if (action === "approve") {
-        await goalsService.approveGoal(goalId);
-      } else {
-        await goalsService.rejectGoal(goalId);
-      }
-      setPendingGoals((prev) => prev.filter((goal) => goal.id !== goalId));
-      toast.success(action === "approve" ? "Goal approved" : "Goal rejected");
-    } catch {
-      toast.error(`Failed to ${action} goal`);
-    }
-  };
-
-  const pendingApprovalsCount = pendingCheckins.length + pendingGoals.length + pendingProposalsCount;
-
-  if (activeMode !== "manager") {
+  if (!user || user.role !== "manager") {
     return (
       <Card className="space-y-2 rounded-2xl border border-border/75 bg-card/95">
         <CardTitle>Manager mode required</CardTitle>
-        <CardDescription>Switch to Manager Mode to load team data and approvals.</CardDescription>
+        <CardDescription>Only manager accounts can view this dashboard.</CardDescription>
       </Card>
     );
   }
 
+  if (activeMode !== "manager") {
+    return (
+      <Card className="space-y-2 rounded-2xl border border-border/75 bg-card/95">
+        <CardTitle>Switching to manager mode</CardTitle>
+        <CardDescription>Preparing manager data context.</CardDescription>
+      </Card>
+    );
+  }
+
+  const hasTeam = (dashboardData?.team_size ?? 0) > 0;
+  const topAttention = [...team]
+    .sort((a, b) => a.goal_progress_percent - b.goal_progress_percent)
+    .slice(0, 3);
+  const nextAction = pendingApprovalsCount > 0
+    ? {
+        title: "Review pending approvals",
+        subtitle: `${pendingApprovalsCount} approvals are waiting for your decision.`,
+        href: "/manager/approvals",
+        label: "Open Approvals",
+      }
+    : (dashboardData?.at_risk ?? 0) > 0
+      ? {
+          title: "Address at-risk team members",
+          subtitle: `${dashboardData?.at_risk ?? 0} team members need intervention this week.`,
+          href: "/manager/team-dashboard",
+          label: "Open Team Dashboard",
+        }
+      : {
+          title: "Review team analytics",
+          subtitle: "Use deeper trends to prepare your next 1:1 planning pass.",
+          href: "/manager/team-performance",
+          label: "Open Analytics",
+        };
+
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      <Card className="space-y-2 rounded-2xl border border-border/75 bg-card/95">
-        <CardTitle>Team Overview</CardTitle>
-        <CardDescription>{loading ? "Loading..." : `${overview?.kpi.active_reports ?? team.length} active reports.`}</CardDescription>
-      </Card>
-      <Card className="space-y-2 rounded-2xl border border-border/75 bg-card/95">
-        <CardTitle>Goal Allotment</CardTitle>
-        <CardDescription>{loading ? "Loading..." : `${overview?.kpi.team_goals ?? 0} team goals currently tracked.`}</CardDescription>
-      </Card>
-      <Card className="space-y-2 rounded-2xl border border-border/75 bg-card/95">
-        <CardTitle>Pending Approvals</CardTitle>
-        <CardDescription>
-          {loading
-            ? "Loading..."
-            : `${pendingApprovalsCount} pending total (${pendingGoals.length} goals, ${pendingCheckins.length} check-ins, ${pendingProposalsCount} meetings).`}
-        </CardDescription>
-      </Card>
-      <Card className="space-y-2 rounded-2xl border border-border/75 bg-card/95">
-        <CardTitle>Team Performance</CardTitle>
-        <CardDescription>{loading ? "Loading..." : `Team consistency: ${overview?.kpi.consistency ?? 0}%.`}</CardDescription>
-      </Card>
-      <Card className="space-y-2 rounded-2xl border border-border/75 bg-card/95">
-        <CardTitle>Meetings</CardTitle>
-        <CardDescription>Coordinate weekly check-ins and escalation meetings for your team.</CardDescription>
-      </Card>
-      <Card className="space-y-2 rounded-2xl border border-border/75 bg-card/95">
-        <CardTitle>AI Insights</CardTitle>
-        <CardDescription>{overview?.insights.primary || "AI team insights unavailable."}</CardDescription>
+    <div className="space-y-6">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          title="Active Reports"
+          value={String(dashboardData?.team_size ?? team.length)}
+          trendLabel="Direct reports"
+          trend="flat"
+          icon={Users}
+        />
+        <StatCard
+          title="Goals Completed"
+          value={String(dashboardData?.completed_goals ?? 0)}
+          trendLabel="Team completion"
+          trend={(dashboardData?.completed_goals ?? 0) > 0 ? "up" : "flat"}
+          icon={Users}
+        />
+        <StatCard
+          title="At-Risk"
+          value={String(dashboardData?.at_risk ?? 0)}
+          trendLabel="Needs intervention"
+          trend={(dashboardData?.at_risk ?? 0) > 0 ? "down" : "flat"}
+          icon={Users}
+        />
+        <StatCard
+          title="Pending Approvals"
+          value={String(pendingApprovalsCount)}
+          trendLabel={`${pendingCheckinsCount} check-ins · ${pendingProposalsCount} meetings`}
+          trend={pendingApprovalsCount > 0 ? "down" : "flat"}
+          icon={Users}
+        />
+      </section>
+
+      {loading && (
+        <Card className="space-y-2">
+          <CardTitle>Loading manager dashboard</CardTitle>
+          <CardDescription>Fetching team snapshot data.</CardDescription>
+        </Card>
+      )}
+
+      {loadError && !loading && (
+        <Card className="space-y-2">
+          <CardTitle>Dashboard unavailable</CardTitle>
+          <CardDescription>{loadError}</CardDescription>
+        </Card>
+      )}
+
+      <Card className="space-y-4 rounded-2xl border border-border/75 bg-card/95">
+        <CardTitle>{nextAction.title}</CardTitle>
+        <CardDescription>{nextAction.subtitle}</CardDescription>
+        <Link href={nextAction.href}>
+          <Button className="gap-2">
+            {nextAction.label}
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        </Link>
       </Card>
 
-      <Card className="space-y-3 rounded-2xl border border-border/75 bg-card/95 lg:col-span-2">
-        <CardTitle>Pending Goal Approvals</CardTitle>
-        <CardDescription>Submitted goals awaiting your decision.</CardDescription>
-
-        {pendingGoals.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No submitted goals waiting for approval.</p>
+      <Card className="space-y-3 rounded-2xl border border-border/75 bg-card/95">
+        <CardTitle>Immediate Attention</CardTitle>
+        <CardDescription>Top three team members who may need coaching this week.</CardDescription>
+        {!topAttention.length ? (
+          <p className="text-sm text-muted-foreground">No team members are currently flagged.</p>
         ) : (
-          pendingGoals.map((goal) => {
-            const ownerName = team.find((member) => member.id === goal.user_id)?.name || "Team member";
-            return (
-              <div key={goal.id} className="space-y-2 rounded-md border border-border/70 p-3">
-                <p className="text-sm font-medium text-foreground">{goal.title}</p>
-                <p className="text-xs text-muted-foreground">Owner: {ownerName} | Progress: {goal.progress}% | Weightage: {goal.weightage}%</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => decideGoal(goal.id, "approve")}>Approve</Button>
-                  <Button size="sm" variant="outline" onClick={() => decideGoal(goal.id, "reject")}>Reject</Button>
-                </div>
+          topAttention.map((member) => (
+            <div key={member.id} className="rounded-lg border border-border/70 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium text-foreground">{member.name}</p>
+                <span className="text-xs text-muted-foreground">{member.goal_progress_percent}%</span>
               </div>
-            );
-          })
-        )}
-      </Card>
-
-      <Card className="space-y-3 rounded-2xl border border-border/75 bg-card/95 lg:col-span-2">
-        <CardTitle>Pending Check-ins</CardTitle>
-        <CardDescription>Submitted check-ins awaiting manager review.</CardDescription>
-
-        {pendingCheckins.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No pending check-ins.</p>
-        ) : (
-          pendingCheckins.map((item) => (
-            <div key={item.id} className="space-y-2 rounded-md border border-border/70 p-3">
-              <p className="text-sm font-medium text-foreground">{item.employee_name} · {item.goal_title}</p>
-              <p className="text-xs text-muted-foreground">Progress: {item.progress}%</p>
-              {item.blockers ? <p className="text-sm text-muted-foreground">Blockers: {item.blockers}</p> : null}
-              <Textarea
-                value={feedbackByCheckin[item.id] || ""}
-                onChange={(event) => setFeedbackByCheckin((prev) => ({ ...prev, [item.id]: event.target.value }))}
-                placeholder="Add manager feedback"
-              />
-              <Button size="sm" onClick={() => reviewCheckin(item.id)}>Review</Button>
+              <p className="mt-1 text-xs text-muted-foreground">{member.department} · {member.consistency_percent}% consistency</p>
             </div>
           ))
         )}
+      </Card>
+
+      {!loading && !hasTeam && (
+        <Card className="space-y-2">
+          <CardTitle>No team assigned</CardTitle>
+          <CardDescription>{dashboardData?.message || "No direct reports are assigned to this manager yet."}</CardDescription>
+        </Card>
+      )}
+
+      <Card className="space-y-2 rounded-2xl border border-border/75 bg-card/95">
+        <CardTitle>Manager Insight</CardTitle>
+        <CardDescription>{dashboardData?.insights?.[0] || "No AI insight available yet."}</CardDescription>
       </Card>
     </div>
   );

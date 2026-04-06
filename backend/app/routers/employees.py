@@ -43,7 +43,7 @@ async def get_employee(
 @router.post("", response_model=EmployeeOut)
 async def create_employee(
     payload: EmployeeCreate,
-    _: User = Depends(require_roles(UserRole.admin)),
+    _: User = Depends(require_roles(UserRole.hr)),
     db: AsyncSession = Depends(get_db),
 ) -> EmployeeOut:
     employee = await EmployeeService.create_employee(payload, db)
@@ -55,7 +55,7 @@ async def create_employee(
 async def update_employee(
     employee_id: str,
     payload: EmployeeUpdate,
-    _: User = Depends(require_roles(UserRole.admin)),
+    _: User = Depends(require_roles(UserRole.hr)),
     db: AsyncSession = Depends(get_db),
 ) -> EmployeeOut:
     employee = await EmployeeService.update_employee(employee_id, payload, db)
@@ -66,7 +66,7 @@ async def update_employee(
 @router.delete("/{employee_id}")
 async def delete_employee(
     employee_id: str,
-    _: User = Depends(require_roles(UserRole.admin)),
+    _: User = Depends(require_roles(UserRole.hr)),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await EmployeeService.delete_employee(employee_id, db)

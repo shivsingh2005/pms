@@ -1,4 +1,5 @@
 import { api } from "@/services/api";
+import type { DashboardNextAction } from "@/types";
 
 export interface DashboardOverview {
   role: string;
@@ -31,8 +32,6 @@ export interface EmployeeDashboardData {
   progress: number;
   completed_goals: number;
   active_goals: number;
-  avg_rating: number;
-  latest_rating: number;
   checkins_count: number;
   last_checkin: string | null;
   consistency_percent: number;
@@ -42,8 +41,6 @@ export interface EmployeeDashboardData {
   review_readiness: string;
   checkin_status: "On Track" | "Missed";
   trend: { week: string; value: number }[];
-  ratings: { week: string; value: number }[];
-  distribution: { name: string; value: number }[];
   consistency: { week: string; value: number }[];
 }
 
@@ -54,6 +51,12 @@ export const dashboardService = {
   },
   async getEmployeeDashboard() {
     const { data } = await api.get<EmployeeDashboardData>("/employee/dashboard");
+    return data;
+  },
+  async getNextAction() {
+    const { data } = await api.get<DashboardNextAction>("/dashboard/next-action", {
+      ...( { skipErrorToast: true } as object),
+    });
     return data;
   },
 };

@@ -1,4 +1,4 @@
-import { BarChartHorizontal, LayoutDashboard, Lightbulb, Files } from "lucide-react";
+import { BarChartHorizontal, Files, LayoutDashboard, Lightbulb, Target } from "lucide-react";
 import { SidebarItem } from "@/components/navigation/SidebarItem";
 
 interface LeadershipSidebarProps {
@@ -13,9 +13,15 @@ const leadershipNavItems = [
   { href: "/leadership/reports", label: "Reports", icon: Files },
 ] as const;
 
+const leadershipGoalsNavItems = [
+  { href: "/leadership/goals", label: "AOP Targets", icon: Target },
+  { href: "/leadership/goals/progress", label: "Cascade Progress", icon: Target },
+] as const;
+
 export function LeadershipSidebar({ pathname, collapsed }: LeadershipSidebarProps) {
   return (
-    <div className="space-y-1 px-3">
+    <div className="space-y-4 px-3">
+      <div className="space-y-1">
       {leadershipNavItems.map((item) => {
         const active = pathname === item.href.split("?")[0];
         return (
@@ -29,6 +35,24 @@ export function LeadershipSidebar({ pathname, collapsed }: LeadershipSidebarProp
           />
         );
       })}
+      </div>
+
+      <div className="space-y-1">
+        {!collapsed ? <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Goals</p> : null}
+        {leadershipGoalsNavItems.map((item) => {
+          const active = pathname === item.href.split("?")[0];
+          return (
+            <SidebarItem
+              key={item.href}
+              href={item.href}
+              label={item.label}
+              active={active}
+              icon={item.icon}
+              collapsed={collapsed}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }

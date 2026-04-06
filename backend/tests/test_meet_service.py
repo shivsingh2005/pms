@@ -39,7 +39,7 @@ def test_ensure_meeting_access_blocks_other_employee():
 async def test_get_meeting_invalid_uuid_returns_400():
     service = MeetService.__new__(MeetService)
     fake_db = SimpleNamespace()
-    fake_user = SimpleNamespace(role=UserRole.admin)
+    fake_user = SimpleNamespace(role=UserRole.leadership)
 
     with pytest.raises(HTTPException) as exc:
         await service.get_meeting("not-a-uuid", fake_user, fake_db)

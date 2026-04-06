@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 
@@ -49,6 +49,14 @@ class DashboardOverviewResponse(BaseModel):
     insights: DashboardInsights
 
 
+class DashboardNextActionResponse(BaseModel):
+    title: str
+    detail: str
+    action_url: str
+    action_label: str
+    level: str = "info"
+
+
 class EmployeeDashboardSeriesPoint(BaseModel):
     week: str
     value: float
@@ -63,8 +71,6 @@ class EmployeeDashboardResponse(BaseModel):
     progress: float
     completed_goals: int
     active_goals: int
-    avg_rating: float
-    latest_rating: float
     checkins_count: int
     last_checkin: datetime | None = None
     consistency_percent: float
@@ -74,6 +80,18 @@ class EmployeeDashboardResponse(BaseModel):
     review_readiness: str
     checkin_status: str
     trend: list[EmployeeDashboardSeriesPoint]
-    ratings: list[EmployeeDashboardSeriesPoint]
-    distribution: list[EmployeeDashboardDistributionPoint]
     consistency: list[EmployeeDashboardSeriesPoint]
+
+
+class TimelineNode(BaseModel):
+    entity_type: str
+    entity_id: str
+    cycle_id: str | None = None
+    occurred_at: datetime
+    title: str
+    status: str
+    metadata: dict[str, str | int | float | None] = Field(default_factory=dict)
+
+
+class EmployeeTimelineResponse(BaseModel):
+    items: list[TimelineNode]

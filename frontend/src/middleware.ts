@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-type UserRole = "employee" | "manager" | "hr" | "leadership" | "admin";
+type UserRole = "employee" | "manager" | "hr" | "leadership";
 
 const protectedRoutes = [
+  "/employee",
   "/employee/dashboard",
   "/manager/dashboard",
   "/hr/dashboard",
@@ -19,23 +20,20 @@ const protectedRoutes = [
   "/hr-dashboard",
   "/hr",
   "/leadership",
-  "/admin",
 ];
 
 const roleHomeRoute: Record<UserRole, string> = {
-  employee: "/employee-dashboard",
-  manager: "/manager-dashboard",
-  hr: "/hr-dashboard",
-  leadership: "/leadership/org-dashboard",
-  admin: "/admin/dashboard",
+  employee: "/employee/dashboard",
+  manager: "/manager/dashboard",
+  hr: "/hr/dashboard",
+  leadership: "/leadership/dashboard",
 };
 
 const roleRoutePrefixes: Record<UserRole, string[]> = {
-  employee: ["/employee", "/employee-dashboard", "/dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
-  manager: ["/manager", "/manager-dashboard", "/dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
-  hr: ["/hr", "/hr-dashboard", "/dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
+  employee: ["/employee", "/employee-dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
+  manager: ["/manager", "/manager-dashboard", "/employee", "/employee-dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
+  hr: ["/hr", "/hr-dashboard"],
   leadership: ["/leadership", "/dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
-  admin: ["/admin", "/dashboard", "/goals", "/checkins", "/meetings", "/reviews"],
 };
 
 function decodeTokenRole(token: string): UserRole | null {
@@ -81,6 +79,15 @@ export function middleware(request: NextRequest) {
   }
 
   const role = decodeTokenRole(token);
+  if (!role) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/";
+    const response = NextResponse.redirect(url);
+    response.cookies.delete("pms_token");
+    response.cookies.delete("pms_refresh_token");
+    return response;
+  }
+
   if (role && !isPathAllowedForRole(pathname, role)) {
     const url = request.nextUrl.clone();
     url.pathname = roleHomeRoute[role];
@@ -92,6 +99,7 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    "/employee/:path*",
     "/employee-dashboard/:path*",
     "/employee/dashboard/:path*",
     "/dashboard/:path*",
@@ -107,6 +115,5 @@ export const config = {
     "/hr/:path*",
     "/leadership/:path*",
     "/leadership/dashboard/:path*",
-    "/admin/:path*",
   ],
 };

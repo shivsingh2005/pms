@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from pydantic import BaseModel, Field, field_validator
+from app.models.enums import PerformanceCycleStatus
 
 
 ALLOWED_CYCLE_TYPES = {"quarterly", "yearly", "hybrid"}
@@ -81,6 +82,8 @@ class PerformanceCycleOut(BaseModel):
     checkin_cap_per_quarter: int
     ai_usage_cap_per_quarter: int
     is_active: bool
+    status: PerformanceCycleStatus
+    locked_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -90,3 +93,70 @@ class PerformanceCycleOut(BaseModel):
 class FrameworkRecommendationResponse(BaseModel):
     recommended_framework: str
     rationale: str
+
+
+class FrameworkSelectionRequest(BaseModel):
+    selected_framework: str = Field(min_length=2, max_length=64)
+    cycle_type: str = Field(default="quarterly", min_length=3, max_length=32)
+
+
+class FrameworkSelectionResponse(BaseModel):
+    user_id: str
+    selected_framework: str
+    cycle_type: str
+    recommendation_reason: str | None = None
+
+
+class DepartmentFrameworkPolicyRequest(BaseModel):
+    department: str = Field(min_length=1, max_length=128)
+    allowed_frameworks: list[str] = Field(default_factory=list)
+    cycle_type: str = Field(default="quarterly", min_length=3, max_length=32)
+    is_active: bool = True
+
+
+class DepartmentFrameworkPolicyResponse(BaseModel):
+    id: str
+    department: str
+    allowed_frameworks: list[str]
+    cycle_type: str
+    is_active: bool
+
+
+class KPILibraryCreateRequest(BaseModel):
+    role: str = Field(min_length=2, max_length=128)
+    domain: str | None = Field(default=None, max_length=128)
+    department: str | None = Field(default=None, max_length=128)
+    goal_title: str = Field(min_length=3, max_length=512)
+    goal_description: str = Field(min_length=3)
+    suggested_kpi: str = Field(min_length=3)
+    suggested_weight: float = Field(gt=0, le=100)
+    framework: str = Field(min_length=2, max_length=64)
+
+
+class KPILibraryItemResponse(BaseModel):
+    id: str
+    role: str
+    domain: str | None = None
+    department: str | None = None
+    goal_title: str
+    goal_description: str
+    suggested_kpi: str
+    suggested_weight: float
+    framework: str
+
+
+class AnnualOperatingPlanCreateRequest(BaseModel):
+    year: int = Field(ge=2000, le=2200)
+    objective: str = Field(min_length=3)
+    target_value: str | None = Field(default=None, max_length=255)
+    department: str | None = Field(default=None, max_length=128)
+
+
+class AnnualOperatingPlanResponse(BaseModel):
+    id: str
+    organization_id: str
+    year: int
+    objective: str
+    target_value: str | None = None
+    department: str | None = None
+    created_by: str | None = None

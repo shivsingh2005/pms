@@ -1,4 +1,4 @@
-export type UserRole = "employee" | "manager" | "hr" | "leadership" | "admin";
+export type UserRole = "employee" | "manager" | "hr" | "leadership";
 
 export interface User {
   id: string;
@@ -8,9 +8,22 @@ export interface User {
   roles: UserRole[];
   organization_id: string;
   manager_id?: string | null;
+  domain?: string | null;
+  business_unit?: string | null;
   department?: string | null;
   title?: string | null;
+  first_login?: boolean;
+  onboarding_complete?: boolean;
+  last_active?: string | null;
   is_active?: boolean;
+}
+
+export interface DashboardNextAction {
+  title: string;
+  detail: string;
+  action_url: string;
+  action_label: string;
+  level: "info" | "warning" | "critical" | string;
 }
 
 export interface Goal {
@@ -30,14 +43,17 @@ export interface Goal {
 
 export interface Checkin {
   id: string;
-  goal_id: string;
+  cycle_id?: string | null;
+  goal_ids: string[];
+  goal_updates: Array<{ goal_id: string; progress?: number | null; note?: string | null }>;
   employee_id: string;
   manager_id: string;
-  progress: number;
+  overall_progress: number;
   status: "draft" | "submitted" | "reviewed";
-  summary?: string | null;
+  summary: string;
+  achievements?: string | null;
   blockers?: string | null;
-  next_steps?: string | null;
+  confidence_level?: number | null;
   manager_feedback?: string | null;
   meeting_date?: string | null;
   meeting_link?: string | null;
@@ -55,16 +71,45 @@ export interface CheckinRating {
   created_at: string;
 }
 
+export interface CheckinTranscriptGoalSummary {
+  goal_id: string;
+  goal_title: string;
+  summary_note: string;
+}
+
+export interface CheckinTranscriptIngestResult {
+  checkin: Checkin;
+  summary: string;
+  key_points: string[];
+  action_items: string[];
+  goal_summaries: CheckinTranscriptGoalSummary[];
+}
+
+export interface CheckinRatingRecommendation {
+  checkin_id: string;
+  suggested_rating: number;
+  confidence: number;
+  rationale: string[];
+  factors: Record<string, number | boolean | null>;
+  override_allowed: boolean;
+}
+
+export interface AIFeedbackCoachingResult {
+  improved_feedback: string;
+  tone_score: number;
+  suggested_version: string;
+}
+
 export interface ManagerPendingCheckin {
   id: string;
   employee_id: string;
   employee_name: string;
-  goal_id: string;
-  goal_title: string;
-  progress: number;
+  goal_ids: string[];
+  goal_titles: string[];
+  overall_progress: number;
   summary?: string | null;
+  achievements?: string | null;
   blockers?: string | null;
-  next_steps?: string | null;
   status: "submitted";
   created_at: string;
 }
@@ -114,6 +159,33 @@ export interface Review {
   created_at: string;
 }
 
+export interface ReviewNarrativeRequest {
+  period?: "quarter" | "year";
+  cycle_year?: number;
+  cycle_quarter?: number;
+  manager_comments?: string;
+}
+
+export interface ReviewNarrative {
+  period: "quarter" | "year";
+  cycle_year?: number | null;
+  cycle_quarter?: number | null;
+  performance_summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  growth_plan: string[];
+  explainability: {
+    scope: "employee" | "team" | "organization";
+    review_count: number;
+    source_review_ids: string[];
+    filters: {
+      period: "quarter" | "year";
+      cycle_year?: number | null;
+      cycle_quarter?: number | null;
+    };
+  };
+}
+
 export interface AIChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -131,6 +203,102 @@ export interface AIGeneratedGoal {
   description: string;
   kpi: string;
   weightage: number;
+}
+
+export interface RoleGoalRecommendation {
+  title: string;
+  description: string;
+  difficulty: "easy" | "medium" | "hard";
+  suggested_weight: number;
+  kpi?: string | null;
+}
+
+export interface RoleGoalCluster {
+  role: "frontend" | "backend" | "others";
+  goals: RoleGoalRecommendation[];
+}
+
+export interface GoalAssignmentRecommendationsPayload {
+  manager_id: string;
+  clusters: RoleGoalCluster[];
+}
+
+export interface GoalAssignmentCandidate {
+  employee_id: string;
+  employee_name: string;
+  role: string;
+  role_key: "frontend" | "backend" | "others";
+  goal_count: number;
+  total_weightage: number;
+  active_checkins: number;
+  workload_percent: number;
+  workload_status: "low" | "medium" | "high";
+}
+
+export interface GoalAssignmentSingleResult {
+  goal: Goal;
+  employee_workload_percent: number;
+  employee_workload_status: "low" | "medium" | "high";
+  warning?: string | null;
+}
+
+export interface GoalCascadeChildPayload {
+  employee_id: string;
+  title: string;
+  description?: string;
+  kpi?: string;
+  framework: "OKR" | "MBO" | "Hybrid";
+  weightage: number;
+  progress: number;
+}
+
+export interface GoalCascadeResult {
+  parent_goal_id: string;
+  children_created: number;
+  child_goal_ids: string[];
+}
+
+export interface GoalLineageNode {
+  goal_id: string;
+  user_id: string;
+  title: string;
+  framework: "OKR" | "MBO" | "Hybrid";
+  weightage: number;
+  progress: number;
+  status: Goal["status"];
+}
+
+export interface GoalLineageEdge {
+  parent_goal_id: string;
+  child_goal_id: string;
+  contribution_percentage: number;
+}
+
+export interface GoalLineage {
+  root_goal_id: string;
+  nodes: GoalLineageNode[];
+  edges: GoalLineageEdge[];
+}
+
+export interface GoalChangeLog {
+  id: string;
+  goal_id: string;
+  changed_by?: string | null;
+  change_type: string;
+  before_state?: Record<string, unknown> | null;
+  after_state?: Record<string, unknown> | null;
+  note?: string | null;
+  created_at: string;
+}
+
+export interface GoalDriftInsight {
+  goal_id: string;
+  user_id: string;
+  title: string;
+  weightage: number;
+  progress: number;
+  drift_score: number;
+  reason: string;
 }
 
 export interface AIGoalGenerationResponse {
@@ -256,6 +424,19 @@ export interface HRReportPayload {
   rows: Record<string, unknown>[];
 }
 
+export interface GeneratedReportSection {
+  heading: string;
+  content: string[];
+}
+
+export interface GeneratedReportPayload {
+  report_type: "individual" | "team" | "business";
+  generated_at: string;
+  summary: string;
+  sections: GeneratedReportSection[];
+  metadata: Record<string, string | number | null>;
+}
+
 export interface HRMeeting {
   id: string;
   title?: string;
@@ -275,7 +456,7 @@ export interface HRMeeting {
   google_event_id?: string | null;
   summary?: string | null;
   status: string;
-  created_by_role?: "manager" | "hr" | "employee" | "admin";
+  created_by_role?: "manager" | "hr" | "employee" | "leadership";
   created_from_checkin: boolean;
   rating_given: boolean;
 }
@@ -293,6 +474,223 @@ export interface TeamGoalGenerationResponse {
   manager_id: string;
   team_structure: string[];
   employees: TeamGoalEmployeeBundle[];
+}
+
+export interface FrameworkRecommendation {
+  recommended_framework: string;
+  rationale: string;
+}
+
+export interface FrameworkSelection {
+  user_id: string;
+  selected_framework: string;
+  cycle_type: string;
+  recommendation_reason?: string | null;
+}
+
+export interface DepartmentFrameworkPolicy {
+  id: string;
+  department: string;
+  allowed_frameworks: string[];
+  cycle_type: string;
+  is_active: boolean;
+}
+
+export interface KPILibraryItem {
+  id: string;
+  role: string;
+  domain?: string | null;
+  department?: string | null;
+  goal_title: string;
+  goal_description: string;
+  suggested_kpi: string;
+  suggested_weight: number;
+  framework: string;
+}
+
+export interface AnnualOperatingPlanItem {
+  id: string;
+  organization_id: string;
+  year: number;
+  objective: string;
+  target_value?: string | null;
+  department?: string | null;
+  created_by?: string | null;
+}
+
+export interface LeadershipAOPTarget {
+  id: string;
+  organization_id: string;
+  cycle_id?: string | null;
+  title: string;
+  description?: string | null;
+  year: number;
+  quarter?: number | null;
+  total_target_value: number;
+  target_unit: string;
+  target_metric: string;
+  department?: string | null;
+  status: string;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+  assigned_target_value: number;
+  assigned_percentage: number;
+  manager_count: number;
+}
+
+export interface AOPManagerAssignment {
+  id: string;
+  aop_id: string;
+  manager_id: string;
+  manager_name: string;
+  manager_department?: string | null;
+  assigned_target_value: number;
+  assigned_percentage: number;
+  target_unit?: string | null;
+  description?: string | null;
+  status: string;
+  acknowledged_at?: string | null;
+}
+
+export interface AOPProgressManager {
+  manager_id: string;
+  manager_name: string;
+  manager_department?: string | null;
+  target_value: number;
+  achieved_value: number;
+  achieved_percentage: number;
+  status_label: string;
+}
+
+export interface AOPProgress {
+  aop_id: string;
+  title: string;
+  total_target_value: number;
+  achieved_value: number;
+  achieved_percentage: number;
+  managers: AOPProgressManager[];
+}
+
+export interface CascadedManagerGoal {
+  goal_id: string;
+  aop_id?: string | null;
+  assignment_id?: string | null;
+  title: string;
+  description?: string | null;
+  target_value?: number | null;
+  target_unit?: string | null;
+  status: string;
+  assigned_by?: string | null;
+}
+
+export interface CascadedEmployeeGoal {
+  goal_id: string;
+  manager_goal_id?: string | null;
+  aop_id?: string | null;
+  title: string;
+  description?: string | null;
+  target_value?: number | null;
+  target_unit?: string | null;
+  target_percentage?: number | null;
+  status: string;
+  contribution_level?: string | null;
+}
+
+export interface GoalLineageImpact {
+  employee_goal_id: string;
+  employee_title: string;
+  employee_target_value?: number | null;
+  employee_target_percentage?: number | null;
+  employee_progress: number;
+  manager_goal_id?: string | null;
+  manager_title?: string | null;
+  manager_target_value?: number | null;
+  manager_progress?: number | null;
+  aop_id?: string | null;
+  aop_title?: string | null;
+  aop_total_value?: number | null;
+  aop_progress?: number | null;
+  contribution_level?: string | null;
+  business_context?: string | null;
+}
+
+export interface EmployeeCascadeSuggestionRequest {
+  manager_name: string;
+  total_target_value: number;
+  target_unit: string;
+  target_metric: string;
+  employees: Array<{
+    employee_id: string;
+    name: string;
+    role: string;
+    current_workload_percentage: number;
+    historical_performance_score?: number;
+  }>;
+}
+
+export interface EmployeeCascadeSuggestion {
+  employee_id: string;
+  suggested_value: number;
+  suggested_percentage: number;
+  rationale: string;
+  workload_after: number;
+}
+
+export interface EmployeeCascadeSuggestionResponse {
+  assignments: EmployeeCascadeSuggestion[];
+  total_check: number;
+  warnings: string[];
+}
+
+export interface AIUsageFeatureStatus {
+  feature_name: string;
+  used: number;
+  limit: number;
+  remaining: number;
+}
+
+export interface AIQuarterlyUsage {
+  quarter: number;
+  year: number;
+  features: AIUsageFeatureStatus[];
+}
+
+export interface AIGrowthSuggestionResult {
+  growth_suggestions: string[];
+  next_quarter_plan: string[];
+  recommended_training: string[];
+}
+
+export interface CycleTimelineNode {
+  id: string;
+  node_name: string;
+  status: string;
+  completed_at?: string | null;
+  locked_at?: string | null;
+  notes?: string | null;
+}
+
+export interface CycleTimelineState {
+  employee_id: string;
+  cycle_id: string;
+  items: CycleTimelineNode[];
+}
+
+export interface NotificationItem {
+  id: string;
+  user_id: string;
+  type: string;
+  title: string;
+  message: string;
+  action_url?: string | null;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface NotificationsPayload {
+  unread_count: number;
+  items: NotificationItem[];
 }
 
 export interface ManagerTeamMember {
@@ -383,13 +781,26 @@ export interface ManagerTeamPerformancePerformerItem {
   employee_id: string;
   employee_name: string;
   progress: number;
+  rating: number;
+  consistency: number;
+}
+
+export interface ManagerDashboardTeamItem {
+  employee_id: string;
+  employee_name: string;
+  progress: number;
+  rating: number;
+  consistency: number;
 }
 
 export interface ManagerTeamPerformancePayload {
+  team_size: number;
+  avg_performance: number;
   avg_progress: number;
   completed_goals: number;
   consistency: number;
   at_risk: number;
+  message?: string | null;
   trend: ManagerTeamPerformanceTrendPoint[];
   distribution: ManagerTeamPerformanceDistributionItem[];
   workload: ManagerTeamPerformanceWorkloadItem[];
@@ -397,113 +808,26 @@ export interface ManagerTeamPerformancePayload {
     top: ManagerTeamPerformancePerformerItem[];
     low: ManagerTeamPerformancePerformerItem[];
   };
+  top_performers: ManagerTeamPerformancePerformerItem[];
+  low_performers: ManagerTeamPerformancePerformerItem[];
+  team: ManagerDashboardTeamItem[];
   insights: string[];
 }
 
-export interface AdminDashboardMetric {
-  total_employees: number;
-  total_managers: number;
-  active_users: number;
-  total_goals: number;
-  active_checkins: number;
-  meetings_scheduled: number;
-  avg_rating: number;
+export interface ManagerStackRankingItem {
+  rank: number;
+  employee_id: string;
+  employee_name: string;
+  progress: number;
+  rating: number;
+  consistency: number;
+  risk_level: "low" | "medium" | "high";
 }
 
-export interface AdminDashboardPayload {
-  metrics: AdminDashboardMetric;
-  employee_growth: Array<{ month: string; count: number }>;
-  role_distribution: Array<{ role: string; count: number }>;
-  rating_distribution: Array<{ label: string; count: number }>;
-}
-
-export interface AdminUser {
-  id: string;
-  name: string;
-  email: string;
-  role: UserRole;
-  manager_id?: string | null;
-  manager_name?: string | null;
-  department?: string | null;
-  title?: string | null;
-  is_active: boolean;
-  created_at: string;
-}
-
-export interface AdminUsersListPayload {
-  users: AdminUser[];
-  managers: Array<{ id: string; name: string }>;
-  departments: string[];
-}
-
-export interface AdminCreateUserPayload {
-  name: string;
-  email: string;
-  role: UserRole;
-  manager_id?: string | null;
-  department?: string | null;
-  title?: string | null;
-  password?: string;
-}
-
-export interface AdminUpdateUserPayload {
-  name?: string;
-  email?: string;
-  role?: UserRole;
-  manager_id?: string | null;
-  department?: string | null;
-  title?: string | null;
-  is_active?: boolean;
-}
-
-export interface AdminRolePermission {
-  role_key: string;
-  display_name: string;
-  permissions: string[];
-  is_system: boolean;
-  updated_at: string;
-}
-
-export interface AdminUpsertRolePayload {
-  role_key: string;
-  display_name: string;
-  permissions: string[];
-}
-
-export interface AdminOrgManagerNode {
-  manager_id: string;
-  manager_name: string;
-  department?: string | null;
-  team_size: number;
-  avg_team_rating: number;
-  members: AdminUser[];
-}
-
-export interface AdminOrgStructurePayload {
-  leaders: AdminUser[];
-  managers: AdminOrgManagerNode[];
-}
-
-export interface AdminSystemSettings {
-  working_hours: Record<string, unknown>;
-  rating_scale: Record<string, unknown>;
-  checkin_frequency: Record<string, unknown>;
-  ai_settings: Record<string, unknown>;
-}
-
-export interface AdminAuditLog {
-  id: string;
-  actor_user_id: string;
-  action: string;
-  target_type: string;
-  target_id?: string | null;
-  message: string;
-  details: Record<string, unknown>;
-  created_at: string;
-}
-
-export interface AdminBulkUploadResult {
-  created: number;
-  failed: number;
-  errors: string[];
+export interface ManagerStackRankingPayload {
+  sort_by: "progress" | "rating" | "consistency";
+  order: "asc" | "desc";
+  at_risk_only: boolean;
+  total_considered: number;
+  items: ManagerStackRankingItem[];
 }

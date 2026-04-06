@@ -121,71 +121,82 @@ export function useLeadershipPortalData(filters: LeadershipFilters) {
     setError(null);
 
     try {
-      const [overview, hrOverview, orgAnalytics, managers, meetings] = await Promise.all([
+      const [overview, hrOverview] = await Promise.all([
         dashboardService.getOverview().catch(() => null),
         hrService.getOverview().catch(() => null),
-        hrService.getOrgAnalytics().catch(() => null),
-        hrService.getManagers(filters.department).catch(() => []),
-        hrService.getMeetings(filters.managerId ? { manager_id: filters.managerId } : undefined).catch(() => []),
       ]);
 
-      let employees = await hrService
+      const employees = await hrService
         .getEmployees({
           department: filters.department || undefined,
           manager_id: filters.managerId || undefined,
         })
         .catch(() => []);
-
-      if (filters.managerId) {
-        const teamRows = await hrService
-          .getTeamByManager(filters.managerId, { department: filters.department || undefined })
-          .catch(() => []);
-
-        if (teamRows.length) {
-          const teamById = new Map(teamRows.map((member) => [member.id, member]));
-          employees = employees
-            .filter((entry) => teamById.has(entry.id))
-            .map((entry) => {
-              const team = teamById.get(entry.id);
-              return {
-                ...entry,
-                progress: team?.progress ?? entry.progress,
-                consistency: team?.consistency ?? entry.consistency,
-                rating: team?.rating ?? entry.rating,
-              };
-            });
-        }
-      }
-
-      const finalRatings = new Map<string, { average_rating: number; ratings_count: number }>();
-      await Promise.all(
-        employees.map(async (employee) => {
-          const rating = await checkinsService.getFinalRating(employee.id).catch(() => null);
-          if (rating) {
-            finalRatings.set(employee.id, rating);
-          }
-        }),
-      );
-
-      const employeesWithFinalRatings = employees.map((employee) => ({
-        ...employee,
-        rating: finalRatingFromRecords(employee, finalRatings.get(employee.id)),
-      }));
-
-      const ratedCheckinsCount = Array.from(finalRatings.values()).reduce((sum, item) => sum + item.ratings_count, 0);
-
       setState({
         overview,
         hrOverview,
-        orgAnalytics,
-        employees: employeesWithFinalRatings,
-        managers,
-        meetings,
-        ratedCheckinsCount,
+        orgAnalytics: null,
+        employees,
+        managers: [],
+        meetings: [],
+        ratedCheckinsCount: 0,
+      });
+
+      setLoading(false);
+
+      Promise.all([
+        hrService.getOrgAnalytics().catch(() => null),
+        hrService.getManagers(filters.department).catch(() => []),
+        hrService.getMeetings(filters.managerId ? { manager_id: filters.managerId } : undefined).catch(() => []),
+        (async () => {
+          let scopedEmployees = employees;
+          if (filters.managerId) {
+            const teamRows = await hrService
+              .getTeamByManager(filters.managerId, { department: filters.department || undefined })
+              .catch(() => []);
+
+            if (teamRows.length) {
+              const teamById = new Map(teamRows.map((member) => [member.id, member]));
+              scopedEmployees = employees
+                .filter((entry) => teamById.has(entry.id))
+                .map((entry) => {
+                  const team = teamById.get(entry.id);
+                  return {
+                    ...entry,
+                    progress: team?.progress ?? entry.progress,
+                    consistency: team?.consistency ?? entry.consistency,
+                    rating: team?.rating ?? entry.rating,
+                  };
+                });
+            }
+          }
+
+          const finalRatings = new Map<string, { average_rating: number; ratings_count: number }>();
+          const ratings = await checkinsService.getFinalRatingsBulk(scopedEmployees.map((employee) => employee.id)).catch(() => []);
+          for (const rating of ratings) {
+            finalRatings.set(rating.employee_id, rating);
+          }
+
+          const employeesWithFinalRatings = scopedEmployees.map((employee) => ({
+            ...employee,
+            rating: finalRatingFromRecords(employee, finalRatings.get(employee.id)),
+          }));
+          const ratedCheckinsCount = Array.from(finalRatings.values()).reduce((sum, item) => sum + item.ratings_count, 0);
+
+          return { employeesWithFinalRatings, ratedCheckinsCount };
+        })(),
+      ]).then(([orgAnalytics, managers, meetings, ratingsPayload]) => {
+        setState((prev) => ({
+          ...prev,
+          orgAnalytics,
+          managers,
+          meetings,
+          employees: ratingsPayload.employeesWithFinalRatings,
+          ratedCheckinsCount: ratingsPayload.ratedCheckinsCount,
+        }));
       });
     } catch {
       setError("Unable to load leadership insights right now.");
-    } finally {
       setLoading(false);
     }
   }, [filters.department, filters.managerId]);

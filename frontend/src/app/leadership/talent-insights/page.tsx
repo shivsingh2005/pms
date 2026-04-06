@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "@/components/charts/recharts-lazy";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { MetricChart } from "@/components/dashboard/MetricChart";
@@ -200,3 +200,4 @@ export default function LeadershipTalentInsightsPage() {
     </motion.div>
   );
 }
+

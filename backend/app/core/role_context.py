@@ -22,6 +22,4 @@ def get_default_mode(user: User) -> UserRole:
     roles = get_user_roles(user)
     if UserRole.manager in roles and user.role == UserRole.manager:
         return UserRole.manager
-    if UserRole.employee in roles:
-        return UserRole.employee
     return user.role

@@ -10,6 +10,7 @@ from app.models.base import Base, UUIDMixin
 class CheckinRating(Base, UUIDMixin):
     __tablename__ = "checkin_ratings"
 
+    cycle_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), ForeignKey("performance_cycles.id"), nullable=True, index=True)
     checkin_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("checkins.id"), nullable=False, index=True)
     employee_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     manager_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)

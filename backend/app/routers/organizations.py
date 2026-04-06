@@ -14,7 +14,7 @@ router = APIRouter(prefix="/organizations", tags=["Organizations"])
 async def create_organization(
     payload: OrganizationCreate,
     db: AsyncSession = Depends(get_db),
-    _: object = Depends(require_roles(UserRole.admin)),
+    _: object = Depends(require_roles(UserRole.leadership)),
 ) -> OrganizationOut:
     org = await OrganizationService.create_organization(payload, db)
     return OrganizationOut.model_validate(org)
@@ -25,7 +25,7 @@ async def assign_user(
     org_id: str,
     payload: OrganizationAssignUser,
     db: AsyncSession = Depends(get_db),
-    _: object = Depends(require_roles(UserRole.admin, UserRole.hr)),
+    _: object = Depends(require_roles(UserRole.hr, UserRole.leadership)),
 ) -> UserOut:
     user = await OrganizationService.assign_user(org_id, payload.user_id, db)
     return UserOut.model_validate(user)

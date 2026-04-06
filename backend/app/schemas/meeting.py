@@ -15,6 +15,7 @@ class MeetingCreateRequest(BaseModel):
     start_time: datetime
     end_time: datetime
     participants: list[str] = Field(default_factory=list)
+    checkin_id: UUID | None = None
     goal_id: UUID | None = None
     employee_id: UUID | None = None
     manager_id: UUID | None = None
@@ -34,6 +35,7 @@ class MeetingOut(BaseModel):
     description: str | None
     organizer_id: UUID
     checkin_id: UUID | None = None
+    cycle_id: UUID | None = None
     employee_id: UUID | None = None
     manager_id: UUID | None = None
     meeting_type: MeetingType
@@ -52,7 +54,7 @@ class MeetingOut(BaseModel):
 
 class TranscriptSyncResponse(BaseModel):
     meeting_id: UUID
-    goal_id: UUID | None = None
+    checkin_id: UUID | None = None
     transcript: str
     checkin_synced: bool
 

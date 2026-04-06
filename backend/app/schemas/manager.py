@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ManagerTeamMember(BaseModel):
@@ -93,6 +93,16 @@ class ManagerTeamPerformancePerformerItem(BaseModel):
     employee_id: str
     employee_name: str
     progress: float
+    rating: float = 0
+    consistency: float = 0
+
+
+class ManagerDashboardTeamItem(BaseModel):
+    employee_id: str
+    employee_name: str
+    progress: float
+    rating: float = 0
+    consistency: float = 0
 
 
 class ManagerTeamPerformancePerformers(BaseModel):
@@ -101,12 +111,43 @@ class ManagerTeamPerformancePerformers(BaseModel):
 
 
 class ManagerTeamPerformanceResponse(BaseModel):
+    team_size: int = 0
+    avg_performance: float = 0
     avg_progress: float
     completed_goals: int
     consistency: float
     at_risk: int
+    message: str | None = None
     trend: list[ManagerTeamPerformanceTrendPoint]
     distribution: list[ManagerTeamPerformanceDistributionItem]
     workload: list[ManagerTeamPerformanceWorkloadItem]
     performers: ManagerTeamPerformancePerformers
+    top_performers: list[ManagerTeamPerformancePerformerItem] = Field(default_factory=list)
+    low_performers: list[ManagerTeamPerformancePerformerItem] = Field(default_factory=list)
+    team: list[ManagerDashboardTeamItem] = Field(default_factory=list)
     insights: list[str]
+
+
+class ManagerStackRankingQuery(BaseModel):
+    sort_by: str = Field(default="progress", pattern="^(progress|rating|consistency)$")
+    order: str = Field(default="desc", pattern="^(asc|desc)$")
+    at_risk_only: bool = False
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class ManagerStackRankingItem(BaseModel):
+    rank: int
+    employee_id: str
+    employee_name: str
+    progress: float
+    rating: float
+    consistency: float
+    risk_level: str
+
+
+class ManagerStackRankingResponse(BaseModel):
+    sort_by: str
+    order: str
+    at_risk_only: bool
+    total_considered: int
+    items: list[ManagerStackRankingItem]

@@ -1,8 +1,9 @@
-from datetime import date
-from sqlalchemy import Boolean, Date, ForeignKey, String
+from datetime import date, datetime
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.models.enums import PerformanceCycleStatus
 
 
 class PerformanceCycle(Base, UUIDMixin, TimestampMixin):
@@ -19,3 +20,10 @@ class PerformanceCycle(Base, UUIDMixin, TimestampMixin):
     checkin_cap_per_quarter: Mapped[int] = mapped_column(default=5, nullable=False)
     ai_usage_cap_per_quarter: Mapped[int] = mapped_column(default=3, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[PerformanceCycleStatus] = mapped_column(
+        Enum(PerformanceCycleStatus, name="performance_cycle_status"),
+        nullable=False,
+        default=PerformanceCycleStatus.planning,
+        index=True,
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

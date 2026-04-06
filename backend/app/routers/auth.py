@@ -155,9 +155,29 @@ async def auth_me(current_user: User = Depends(get_current_user)) -> AuthUserRes
             role=current_user.role,
             roles=roles,
             organization_id=current_user.organization_id,
+            manager_id=current_user.manager_id,
+            domain=current_user.domain,
+            business_unit=current_user.business_unit,
+            department=current_user.department,
+            title=current_user.title,
+            first_login=current_user.first_login,
+            onboarding_complete=current_user.onboarding_complete,
+            last_active=current_user.last_active.isoformat() if current_user.last_active else None,
         ).model_dump(),
         message="User profile fetched",
     )
+
+
+@router.post("/onboarding/complete")
+async def complete_onboarding(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    current_user.first_login = False
+    current_user.onboarding_complete = True
+    current_user.last_active = datetime.now(timezone.utc)
+    await db.commit()
+    return success_response(data={"completed": True}, message="Onboarding marked complete")
 
 
 @router.post("/refresh")

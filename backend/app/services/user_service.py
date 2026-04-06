@@ -12,7 +12,7 @@ class UserService:
             result = await db.execute(select(User).where(User.manager_id == current_user.id))
             return list(result.scalars().all())
 
-        if current_user.role in {UserRole.hr, UserRole.leadership, UserRole.admin}:
+        if current_user.role in {UserRole.hr, UserRole.leadership}:
             result = await db.execute(select(User).where(User.organization_id == current_user.organization_id))
             return list(result.scalars().all())
 

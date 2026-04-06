@@ -14,6 +14,7 @@ interface MeetingsState {
       start_time: string;
       end_time: string;
       participants: string[];
+      checkin_id?: string;
       goal_id?: string;
     }
   ) => Promise<void>;

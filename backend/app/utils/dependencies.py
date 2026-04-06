@@ -68,6 +68,12 @@ async def get_user_mode(
     if not x_user_mode:
         return get_default_mode(current_user)
 
+    if current_user.role != UserRole.manager:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="x-user-mode is only supported for manager accounts",
+        )
+
     mode = x_user_mode.strip().lower()
     if mode not in {UserRole.employee.value, UserRole.manager.value}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid x-user-mode header")

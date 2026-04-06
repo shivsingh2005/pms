@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy import case, func, select
@@ -14,10 +15,13 @@ from app.models.goal import Goal
 from app.models.meeting import Meeting
 from app.models.meeting_proposal import MeetingProposal
 from app.models.user import User
+from app.services.cycle_guard import ensure_cycle_writable
 from app.schemas.meeting import MeetingCreateRequest, MeetingUpdateRequest
 
 
 class MeetService:
+    logger = logging.getLogger(__name__)
+
     def __init__(self, access_token: str | None = None):
         self._access_token = access_token
         self._calendar_service: CalendarService | None = None
@@ -36,12 +40,12 @@ class MeetService:
 
     @staticmethod
     def _validate_create_role(user: User) -> None:
-        if user.role not in {UserRole.employee, UserRole.manager, UserRole.hr, UserRole.admin}:
+        if user.role not in {UserRole.employee, UserRole.manager, UserRole.hr}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to create meetings")
 
     @staticmethod
     def _ensure_meeting_access(current_user: User, meeting: Meeting, organizer_manager_id: UUID | None = None) -> None:
-        if current_user.role in {UserRole.hr, UserRole.admin}:
+        if current_user.role in {UserRole.hr, UserRole.leadership}:
             return
         if current_user.role == UserRole.employee and meeting.organizer_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Meeting access denied")
@@ -75,17 +79,25 @@ class MeetService:
         self._validate_create_role(current_user)
 
         meeting_type = payload.meeting_type
-        if meeting_type == MeetingType.CHECKIN and payload.goal_id is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="goal_id is required for CHECKIN meetings")
+        if meeting_type == MeetingType.CHECKIN and payload.checkin_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="checkin_id is required for CHECKIN meetings")
+
+        linked_checkin: Checkin | None = None
+        if payload.checkin_id is not None:
+            linked_checkin = await db.get(Checkin, payload.checkin_id)
+            if not linked_checkin:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Check-in not found")
+            await ensure_cycle_writable(db, linked_checkin.cycle_id, locked_detail="Cannot create meeting in a locked cycle")
 
         goal: Goal | None = None
-        if payload.goal_id is not None:
+        if payload.goal_id is not None and meeting_type != MeetingType.CHECKIN:
             goal_result = await db.execute(select(Goal).where(Goal.id == payload.goal_id))
             goal = goal_result.scalar_one_or_none()
             if not goal:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+            await ensure_cycle_writable(db, goal.cycle_id, locked_detail="Cannot create meeting in a locked cycle")
 
-        resolved_employee_id = payload.employee_id or (goal.user_id if goal else None)
+        resolved_employee_id = payload.employee_id or (linked_checkin.employee_id if linked_checkin else None) or (goal.user_id if goal else None)
         if resolved_employee_id is None and current_user.role == UserRole.employee:
             resolved_employee_id = current_user.id
 
@@ -101,11 +113,14 @@ class MeetService:
             if current_user.organization_id != employee.organization_id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee must be in the same organization")
 
-        if meeting_type == MeetingType.CHECKIN and goal is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CHECKIN meetings require a valid goal_id")
+        if meeting_type == MeetingType.CHECKIN and linked_checkin is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CHECKIN meetings require a valid checkin_id")
 
         if meeting_type == MeetingType.CHECKIN and employee is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CHECKIN meetings require a target employee")
+
+        if linked_checkin is not None and employee is not None and linked_checkin.employee_id != employee.id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Check-in does not belong to selected employee")
 
         if goal is not None and employee is not None and goal.user_id != employee.id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Goal does not belong to selected employee")
@@ -171,7 +186,8 @@ class MeetService:
             title=payload.title,
             description=payload.description,
             organizer_id=current_user.id,
-            checkin_id=None,
+            checkin_id=linked_checkin.id if linked_checkin else None,
+            cycle_id=(linked_checkin.cycle_id if linked_checkin else (goal.cycle_id if goal else None)),
             employee_id=employee.id if employee else None,
             manager_id=manager.id if manager else None,
             meeting_type=meeting_type,
@@ -194,6 +210,17 @@ class MeetService:
             await db.rollback()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Meeting could not be created due to a data conflict") from exc
         await db.refresh(meeting)
+        MeetService.logger.info(
+            "Meeting created",
+            extra={
+                "meeting_id": str(meeting.id),
+                "organizer_id": str(meeting.organizer_id),
+                "employee_id": str(meeting.employee_id) if meeting.employee_id else None,
+                "manager_id": str(meeting.manager_id) if meeting.manager_id else None,
+                "cycle_id": str(meeting.cycle_id) if meeting.cycle_id else None,
+                "meeting_type": meeting.meeting_type.value if hasattr(meeting.meeting_type, "value") else str(meeting.meeting_type),
+            },
+        )
         return meeting
 
     async def list_pending_proposals(self, current_user: User, db: AsyncSession) -> list[MeetingProposal]:
@@ -232,6 +259,7 @@ class MeetService:
         checkin = await db.get(Checkin, proposal.checkin_id)
         if not checkin:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Related check-in not found")
+        await ensure_cycle_writable(db, checkin.cycle_id, locked_detail="Cannot approve proposal in a locked cycle")
 
         employee = await db.get(User, proposal.employee_id)
         if not employee:
@@ -246,7 +274,7 @@ class MeetService:
         try:
             event = await self.calendar_service.client.create_event(
                 title=f"Check-in: {employee.name}",
-                description=f"Check-in discussion for goal {checkin.goal_id}",
+                description=f"Unified check-in discussion for {employee.name}",
                 start_time_iso=start_iso,
                 end_time_iso=end_iso,
                 participants=[employee.email, current_user.email],
@@ -273,10 +301,11 @@ class MeetService:
             description=f"Scheduled from manager approval for check-in {checkin.id}",
             organizer_id=current_user.id,
             checkin_id=checkin.id,
+            cycle_id=checkin.cycle_id,
             employee_id=proposal.employee_id,
             manager_id=proposal.manager_id,
             meeting_type=MeetingType.CHECKIN,
-            goal_id=checkin.goal_id,
+            goal_id=None,
             start_time=proposal.proposed_start_time,
             end_time=proposal.proposed_end_time,
             google_event_id=google_event_id,
@@ -294,6 +323,15 @@ class MeetService:
         await db.commit()
         await db.refresh(meeting)
         await db.refresh(proposal)
+        MeetService.logger.info(
+            "Meeting proposal approved and meeting scheduled",
+            extra={
+                "proposal_id": str(proposal.id),
+                "meeting_id": str(meeting.id),
+                "checkin_id": str(checkin.id),
+                "cycle_id": str(meeting.cycle_id) if meeting.cycle_id else None,
+            },
+        )
         return proposal, meeting
 
     async def reject_proposal(
@@ -317,6 +355,10 @@ class MeetService:
 
         if proposal.manager_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to reject this proposal")
+
+        checkin = await db.get(Checkin, proposal.checkin_id)
+        if checkin:
+            await ensure_cycle_writable(db, checkin.cycle_id, locked_detail="Cannot reject proposal in a locked cycle")
 
         proposal.status = MeetingProposalStatus.rejected
         if suggest_new_start_time is not None:
@@ -357,6 +399,10 @@ class MeetService:
         if proposal.status != MeetingProposalStatus.pending:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only pending proposals can be rescheduled")
 
+        checkin = await db.get(Checkin, proposal.checkin_id)
+        if checkin:
+            await ensure_cycle_writable(db, checkin.cycle_id, locked_detail="Cannot reschedule proposal in a locked cycle")
+
         proposal.proposed_start_time = proposed_start_time
         proposal.proposed_end_time = proposed_end_time
 
@@ -372,7 +418,7 @@ class MeetService:
             stmt = stmt.join(User, Meeting.organizer_id == User.id).where(
                 (Meeting.organizer_id == current_user.id) | (User.manager_id == current_user.id)
             )
-        elif current_user.role in {UserRole.hr, UserRole.admin}:
+        elif current_user.role in {UserRole.hr, UserRole.leadership}:
             stmt = stmt.join(User, Meeting.organizer_id == User.id).where(User.organization_id == current_user.organization_id)
         else:
             stmt = stmt.where(Meeting.organizer_id == current_user.id)
@@ -402,8 +448,9 @@ class MeetService:
         db: AsyncSession,
     ) -> Meeting:
         meeting = await self.get_meeting(meeting_id, current_user, db)
-        if current_user.role not in {UserRole.manager, UserRole.employee, UserRole.hr, UserRole.admin}:
+        if current_user.role not in {UserRole.manager, UserRole.employee, UserRole.hr, UserRole.leadership}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to update meeting")
+        await ensure_cycle_writable(db, meeting.cycle_id, locked_detail="Cannot update meeting in a locked cycle")
 
         try:
             event = await self.calendar_service.client.update_event(
@@ -431,8 +478,9 @@ class MeetService:
 
     async def cancel_meeting(self, meeting_id: str, current_user: User, db: AsyncSession) -> Meeting:
         meeting = await self.get_meeting(meeting_id, current_user, db)
-        if current_user.role not in {UserRole.manager, UserRole.employee, UserRole.hr, UserRole.admin}:
+        if current_user.role not in {UserRole.manager, UserRole.employee, UserRole.hr, UserRole.leadership}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to cancel meeting")
+        await ensure_cycle_writable(db, meeting.cycle_id, locked_detail="Cannot cancel meeting in a locked cycle")
 
         try:
             await self.calendar_service.client.delete_event(meeting.google_event_id)
@@ -467,11 +515,7 @@ class MeetService:
         if not transcript:
             transcript = "Transcript is not yet available from Google Meet artifacts"
 
-        checkin = None
-        if meeting.goal_id is not None:
-            stmt = select(Checkin).where(Checkin.goal_id == meeting.goal_id).order_by(Checkin.meeting_date.desc()).limit(1)
-            checkin_result = await db.execute(stmt)
-            checkin = checkin_result.scalar_one_or_none()
+        checkin = await db.get(Checkin, meeting.checkin_id) if meeting.checkin_id else None
         if checkin:
             checkin.transcript = transcript
             checkin.meeting_link = meeting.meet_link or meeting.google_meet_link
@@ -481,13 +525,13 @@ class MeetService:
 
         return {
             "meeting_id": str(meeting.id),
-            "goal_id": str(meeting.goal_id) if meeting.goal_id else None,
+            "checkin_id": str(meeting.checkin_id) if meeting.checkin_id else None,
             "transcript": transcript,
             "checkin_synced": checkin is not None,
         }
 
     async def analytics(self, current_user: User, db: AsyncSession) -> dict:
-        if current_user.role not in {UserRole.leadership, UserRole.hr, UserRole.admin}:
+        if current_user.role not in {UserRole.leadership, UserRole.hr}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to view analytics")
 
         cache_key = f"meetings:analytics:{current_user.organization_id}"
@@ -513,7 +557,7 @@ class MeetService:
     async def summarize_meeting(self, meeting_id: str, current_user: User, db: AsyncSession) -> dict:
         meeting = await self.get_meeting(meeting_id, current_user, db)
 
-        if meeting.goal_id is None:
+        if meeting.checkin_id is None:
             return {
                 "meeting_id": str(meeting.id),
                 "summary": "Meeting not started yet",
@@ -521,17 +565,7 @@ class MeetService:
                 "action_items": [],
             }
 
-        stmt = select(Checkin).where(Checkin.goal_id == meeting.goal_id).order_by(Checkin.meeting_date.desc())
-        result = await db.execute(stmt)
-        checkins = list(result.scalars().all())
-
-        linked_checkin = None
-        for item in checkins:
-            if (item.meeting_link or "").strip() == (meeting.google_meet_link or "").strip():
-                linked_checkin = item
-                break
-        if linked_checkin is None and checkins:
-            linked_checkin = checkins[0]
+        linked_checkin = await db.get(Checkin, meeting.checkin_id)
 
         if linked_checkin is None:
             return {

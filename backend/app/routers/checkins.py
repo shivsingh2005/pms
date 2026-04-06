@@ -7,10 +7,15 @@ from app.models.user import User
 from app.schemas.checkin import (
     CheckinOut,
     CheckinRateRequest,
+    CheckinRatingRecommendationOut,
     CheckinRatingOut,
     CheckinReviewUpdate,
     CheckinSubmit,
     CheckinSubmitResponse,
+    CheckinTranscriptIngestRequest,
+    CheckinTranscriptIngestResponse,
+    EmployeeFinalRatingsRequest,
+    EmployeeFinalRatingsResponse,
     EmployeeFinalRatingOut,
 )
 from app.services.checkin_service import CheckinService
@@ -78,8 +83,57 @@ async def rate_checkin(
 @router.get("/employee/{employee_id}/final-rating", response_model=EmployeeFinalRatingOut)
 async def get_employee_final_rating(
     employee_id: str,
-    current_user: User = Depends(require_roles(UserRole.employee, UserRole.manager, UserRole.hr, UserRole.leadership, UserRole.admin)),
+    current_user: User = Depends(require_roles(UserRole.manager, UserRole.hr, UserRole.leadership)),
     db: AsyncSession = Depends(get_db),
 ) -> EmployeeFinalRatingOut:
     average_rating, ratings_count = await CheckinService.get_employee_final_rating(employee_id, current_user, db)
     return EmployeeFinalRatingOut(employee_id=employee_id, average_rating=average_rating, ratings_count=ratings_count)
+
+
+@router.post("/employee/final-ratings", response_model=EmployeeFinalRatingsResponse)
+async def get_employee_final_ratings_bulk(
+    payload: EmployeeFinalRatingsRequest,
+    current_user: User = Depends(require_roles(UserRole.manager, UserRole.hr, UserRole.leadership)),
+    db: AsyncSession = Depends(get_db),
+) -> EmployeeFinalRatingsResponse:
+    ratings = await CheckinService.get_employee_final_ratings_bulk(
+        [str(employee_id) for employee_id in payload.employee_ids],
+        current_user,
+        db,
+    )
+    items = [
+        EmployeeFinalRatingOut(employee_id=employee_id, average_rating=average_rating, ratings_count=ratings_count)
+        for employee_id, (average_rating, ratings_count) in ratings.items()
+    ]
+    return EmployeeFinalRatingsResponse(items=items)
+
+
+@router.post("/{checkin_id}/transcript/ingest", response_model=CheckinTranscriptIngestResponse)
+async def ingest_transcript(
+    checkin_id: str,
+    payload: CheckinTranscriptIngestRequest,
+    current_user: User = Depends(require_roles(UserRole.employee, UserRole.manager, UserRole.hr, UserRole.leadership)),
+    db: AsyncSession = Depends(get_db),
+) -> CheckinTranscriptIngestResponse:
+    output = await CheckinService.ingest_transcript(checkin_id, payload, current_user, db)
+    return CheckinTranscriptIngestResponse(
+        checkin=CheckinOut.model_validate(output["checkin"]),
+        summary=output["summary"],
+        key_points=output["key_points"],
+        action_items=output["action_items"],
+        goal_summaries=output["goal_summaries"],
+    )
+
+
+@router.get("/{checkin_id}/rating-recommendation", response_model=CheckinRatingRecommendationOut)
+async def get_rating_recommendation(
+    checkin_id: str,
+    current_user: User = Depends(require_roles(UserRole.manager, UserRole.hr, UserRole.leadership)),
+    mode: UserRole = Depends(get_user_mode),
+    db: AsyncSession = Depends(get_db),
+) -> CheckinRatingRecommendationOut:
+    if current_user.role == UserRole.manager and mode != UserRole.manager:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only manager mode can access manager rating recommendations")
+
+    output = await CheckinService.get_rating_recommendation(checkin_id, current_user, db)
+    return CheckinRatingRecommendationOut(**output)

@@ -3,6 +3,10 @@ import { authCookies } from "@/lib/cookies";
 import { useSessionStore } from "@/store/useSessionStore";
 import { toast } from "sonner";
 
+type ApiRequestConfig = {
+  skipErrorToast?: boolean;
+};
+
 function normalizeErrorMessage(value: unknown): string {
   if (typeof value === "string" && value.trim()) {
     return value;
@@ -52,7 +56,6 @@ api.interceptors.request.use((config) => {
   const userRoles = new Set(user?.roles ?? (user?.role ? [user.role] : []));
   const isManagerCapable = userRoles.has("manager") || user?.role === "manager";
 
-  // x-user-mode is only valid for manager accounts switching between manager/employee contexts.
   if (mode && isManagerCapable) {
     config.headers["x-user-mode"] = mode;
   } else if (config.headers && "x-user-mode" in config.headers) {
@@ -72,6 +75,7 @@ api.interceptors.response.use(
   },
   async (error) => {
     const status = error?.response?.status;
+    const skipErrorToast = Boolean((error?.config as ApiRequestConfig | undefined)?.skipErrorToast);
     const requestUrl = error?.config?.url
       ? String(error.config.url).startsWith("http")
         ? String(error.config.url)
@@ -118,6 +122,10 @@ api.interceptors.response.use(
       if (typeof window !== "undefined") {
         window.location.href = "/";
       }
+    }
+
+    if (skipErrorToast) {
+      return Promise.reject(error);
     }
 
     toast.error(detail);

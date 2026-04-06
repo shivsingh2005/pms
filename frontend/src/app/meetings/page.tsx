@@ -5,8 +5,8 @@ import { motion } from "framer-motion";
 import { CalendarDays } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMeetingsStore } from "@/store/useMeetingsStore";
-import { goalsService } from "@/services/goals";
-import type { Goal } from "@/types";
+import { checkinsService } from "@/services/checkins";
+import type { Checkin } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -46,7 +46,7 @@ interface MeetingDraft {
   description: string;
   start: string;
   end: string;
-  goalId: string;
+  checkinId: string;
   meetingType: "CHECKIN" | "GENERAL" | "REVIEW";
   participants: string;
 }
@@ -59,10 +59,10 @@ export default function MeetingsPage() {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [meetingType, setMeetingType] = useState<"CHECKIN" | "GENERAL" | "REVIEW">("GENERAL");
-  const [goalId, setGoalId] = useState("");
+  const [checkinId, setCheckinId] = useState("");
   const [participants, setParticipants] = useState("");
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [goalsLoading, setGoalsLoading] = useState(false);
+  const [checkins, setCheckins] = useState<Checkin[]>([]);
+  const [checkinsLoading, setCheckinsLoading] = useState(false);
   const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
   const oauthHandledRef = useRef(false);
 
@@ -71,10 +71,10 @@ export default function MeetingsPage() {
     description,
     start,
     end,
-    goalId,
+    checkinId,
     meetingType,
     participants,
-  }), [description, end, goalId, meetingType, participants, start, title]);
+  }), [checkinId, description, end, meetingType, participants, start, title]);
 
   const persistDraft = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -98,7 +98,7 @@ export default function MeetingsPage() {
         start: parsed.start ?? "",
         end: parsed.end ?? "",
         meetingType: (parsed.meetingType as "CHECKIN" | "GENERAL" | "REVIEW") ?? "GENERAL",
-        goalId: ((parsed.meetingType as "CHECKIN" | "GENERAL" | "REVIEW") ?? "GENERAL") === "CHECKIN" ? parsed.goalId ?? "" : "",
+        checkinId: ((parsed.meetingType as "CHECKIN" | "GENERAL" | "REVIEW") ?? "GENERAL") === "CHECKIN" ? parsed.checkinId ?? "" : "",
         participants: parsed.participants ?? "",
       };
     } catch {
@@ -112,7 +112,7 @@ export default function MeetingsPage() {
     setStart(draft.start);
     setEnd(draft.end);
     setMeetingType(draft.meetingType);
-    setGoalId(draft.goalId);
+    setCheckinId(draft.checkinId);
     setParticipants(draft.participants);
   };
 
@@ -121,17 +121,17 @@ export default function MeetingsPage() {
   }, [fetchMeetings]);
 
   useEffect(() => {
-    setGoalsLoading(true);
-    goalsService
-      .getGoals()
+    setCheckinsLoading(true);
+    checkinsService
+      .getCheckins()
       .then((items) => {
-        setGoals(items);
+        setCheckins(items);
       })
       .catch(() => {
-        setGoals([]);
+        setCheckins([]);
       })
       .finally(() => {
-        setGoalsLoading(false);
+        setCheckinsLoading(false);
       });
   }, []);
 
@@ -144,7 +144,7 @@ export default function MeetingsPage() {
 
   useEffect(() => {
     if (meetingType !== "CHECKIN") {
-      setGoalId("");
+      setCheckinId("");
     }
   }, [meetingType]);
 
@@ -188,8 +188,8 @@ export default function MeetingsPage() {
       return;
     }
 
-    if (source.meetingType === "CHECKIN" && !source.goalId.trim()) {
-      toast.error("Goal is required for check-in meetings");
+    if (source.meetingType === "CHECKIN" && !source.checkinId.trim()) {
+      toast.error("Check-in is required for check-in meetings");
       return;
     }
 
@@ -207,7 +207,7 @@ export default function MeetingsPage() {
         description: source.description,
         start_time: startDate.toISOString(),
         end_time: endDate.toISOString(),
-        goal_id: source.meetingType === "CHECKIN" ? source.goalId.trim() : undefined,
+        checkin_id: source.meetingType === "CHECKIN" ? source.checkinId.trim() : undefined,
         participants: participantList,
       });
       setTitle("");
@@ -215,7 +215,7 @@ export default function MeetingsPage() {
       setStart("");
       setEnd("");
       setMeetingType("GENERAL");
-      setGoalId("");
+      setCheckinId("");
       setParticipants("");
       clearDraft();
       toast.success("Meeting created");
@@ -341,17 +341,17 @@ export default function MeetingsPage() {
             </div>
             {meetingType === "CHECKIN" && (
               <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Goal</label>
+                <label className="text-sm font-medium text-foreground">Check-in</label>
                 <select
-                  value={goalId}
-                  onChange={(e) => setGoalId(e.target.value)}
+                  value={checkinId}
+                  onChange={(e) => setCheckinId(e.target.value)}
                   className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground"
-                  disabled={goalsLoading}
+                  disabled={checkinsLoading}
                 >
-                  <option value="">{goalsLoading ? "Loading goals..." : "Select a goal"}</option>
-                  {goals.map((goal) => (
-                    <option key={goal.id} value={goal.id}>
-                      {goal.title}
+                  <option value="">{checkinsLoading ? "Loading check-ins..." : "Select a check-in"}</option>
+                  {checkins.map((checkin) => (
+                    <option key={checkin.id} value={checkin.id}>
+                      {new Date(checkin.created_at).toLocaleDateString()} - {checkin.summary.slice(0, 60)}
                     </option>
                   ))}
                 </select>
@@ -381,3 +381,4 @@ export default function MeetingsPage() {
     </motion.div>
   );
 }
+

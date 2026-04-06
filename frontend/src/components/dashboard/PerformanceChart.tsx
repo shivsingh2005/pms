@@ -12,7 +12,7 @@ export function PerformanceChart({ data }: PerformanceChartProps) {
     <ChartCard
       title="Performance Trend"
       description="Weekly progress movement across recent weeks"
-      className="rounded-2xl border border-border/75 bg-card/95"
+      className="rounded-xl border border-border bg-card"
     >
       <MetricChart kind="line" data={data} xKey="week" yKey="value" />
     </ChartCard>

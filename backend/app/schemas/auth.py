@@ -13,6 +13,14 @@ class LoginUserResponse(BaseModel):
     role: UserRole
     email: EmailStr | None = None
     roles: list[UserRole] = Field(default_factory=list)
+    domain: str | None = None
+    business_unit: str | None = None
+    department: str | None = None
+    title: str | None = None
+    manager_id: UUID | None = None
+    first_login: bool = True
+    onboarding_complete: bool = False
+    last_active: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -57,5 +65,13 @@ class AuthUserResponse(BaseModel):
     role: UserRole
     roles: list[UserRole] = Field(default_factory=list)
     organization_id: UUID
+    manager_id: UUID | None = None
+    domain: str | None = None
+    business_unit: str | None = None
+    department: str | None = None
+    title: str | None = None
+    first_login: bool = True
+    onboarding_complete: bool = False
+    last_active: str | None = None
 
     model_config = {"from_attributes": True}

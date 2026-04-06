@@ -16,12 +16,12 @@ import { dashboardService, type DashboardOverview } from "@/services/dashboard";
 const emptyOverview: DashboardOverview = {
   role: "employee",
   kpi: {},
-  trend: [{ name: "Q1", score: 0 }, { name: "Q2", score: 0 }, { name: "Q3", score: 0 }, { name: "Q4", score: 0 }],
-  velocity: [{ name: "W1", score: 0 }, { name: "W2", score: 0 }, { name: "W3", score: 0 }, { name: "W4", score: 0 }],
-  distribution: [{ name: "EE", value: 0 }, { name: "DE", value: 0 }, { name: "ME", value: 0 }, { name: "SME", value: 0 }, { name: "NI", value: 0 }],
+  trend: [],
+  velocity: [],
+  distribution: [],
   heatmap: [],
   stack_ranking: [],
-  insights: { primary: "No data yet.", secondary: "Complete actions to generate dashboard insights." },
+  insights: { primary: "No data available.", secondary: "Start by creating goals and check-ins." },
 };
 
 export function RoleDashboard({ role }: { role: UserRole }) {
@@ -37,6 +37,22 @@ export function RoleDashboard({ role }: { role: UserRole }) {
   const trend = overview.trend;
   const velocity = overview.velocity;
   const distribution = overview.distribution;
+  const hasData =
+    trend.length > 0 ||
+    velocity.length > 0 ||
+    distribution.length > 0 ||
+    overview.heatmap.length > 0 ||
+    overview.stack_ranking.length > 0 ||
+    Object.values(overview.kpi ?? {}).some((value) => Number(value ?? 0) > 0);
+
+  if (!hasData) {
+    return (
+      <DashboardCard className="rounded-xl p-6 shadow-sm">
+        <CardTitle>No data available</CardTitle>
+        <p className="mt-2 text-sm text-muted-foreground">Start by creating goals to unlock check-ins, meetings, and ratings.</p>
+      </DashboardCard>
+    );
+  }
 
   if (role === "employee") {
     return (

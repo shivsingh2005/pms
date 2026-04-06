@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { hrService } from "@/services/hr";
+import { reportsService } from "@/services/reports";
 import { useLeadershipPortalData } from "@/hooks/useLeadershipPortalData";
 import { useSessionStore } from "@/store/useSessionStore";
 
@@ -149,44 +150,58 @@ export default function LeadershipReportsPage() {
     setGenerating(true);
     try {
       if (reportType === "performance") {
-        const payload = await hrService.getReport("org").catch(() => null);
-        const orgRow = (payload?.rows?.[0] as Record<string, unknown> | undefined) ?? null;
-        const analytics = orgRow
-          ? {
-              performance_trend: Array.isArray(orgRow.performance_trend) ? orgRow.performance_trend : [],
-              department_comparison: Array.isArray(orgRow.department_comparison) ? orgRow.department_comparison : [],
-              rating_distribution: Array.isArray(orgRow.rating_distribution) ? orgRow.rating_distribution : [],
-              checkin_consistency: Array.isArray(orgRow.checkin_consistency) ? orgRow.checkin_consistency : [],
-            }
-          : raw.orgAnalytics;
+        const payload = await reportsService.generate({ report_type: "business" }).catch(() => null);
+        const rows: ReportRow[] = payload
+          ? payload.sections.flatMap((section, sectionIndex) =>
+              section.content.map((line, lineIndex) => ({
+                row: sectionIndex * 100 + lineIndex + 1,
+                section: section.heading,
+                insight: line,
+              })),
+            )
+          : [];
 
-        const rows: ReportRow[] = [
-          ...((analytics?.performance_trend as Array<Record<string, unknown>> | undefined) ?? []).map((item, index) => ({
-            row: index + 1,
-            metric: "performance_trend",
-            period: String(item.week ?? ""),
-            value: Number(item.value ?? 0),
-          })),
-          ...((analytics?.department_comparison as Array<Record<string, unknown>> | undefined) ?? []).map((item, index) => ({
-            row: index + 1,
-            metric: "department_comparison",
-            period: String(item.department ?? ""),
-            value: Number(item.value ?? 0),
-          })),
-          ...((analytics?.rating_distribution as Array<Record<string, unknown>> | undefined) ?? []).map((item, index) => ({
-            row: index + 1,
-            metric: "rating_distribution",
-            period: String(item.label ?? ""),
-            value: Number(item.count ?? 0),
-          })),
-          ...((analytics?.checkin_consistency as Array<Record<string, unknown>> | undefined) ?? []).map((item, index) => ({
-            row: index + 1,
-            metric: "checkin_consistency",
-            period: String(item.week ?? ""),
-            value: Number(item.value ?? 0),
-          })),
-        ];
-        setReportRows(rows);
+        if (!rows.length) {
+          const fallback = await hrService.getReport("org").catch(() => null);
+          const orgRow = (fallback?.rows?.[0] as Record<string, unknown> | undefined) ?? null;
+          const analytics = orgRow
+            ? {
+                performance_trend: Array.isArray(orgRow.performance_trend) ? orgRow.performance_trend : [],
+                department_comparison: Array.isArray(orgRow.department_comparison) ? orgRow.department_comparison : [],
+                rating_distribution: Array.isArray(orgRow.rating_distribution) ? orgRow.rating_distribution : [],
+                checkin_consistency: Array.isArray(orgRow.checkin_consistency) ? orgRow.checkin_consistency : [],
+              }
+            : raw.orgAnalytics;
+
+          setReportRows([
+            ...((analytics?.performance_trend as Array<Record<string, unknown>> | undefined) ?? []).map((item, index) => ({
+              row: index + 1,
+              metric: "performance_trend",
+              period: String(item.week ?? ""),
+              value: Number(item.value ?? 0),
+            })),
+            ...((analytics?.department_comparison as Array<Record<string, unknown>> | undefined) ?? []).map((item, index) => ({
+              row: index + 1,
+              metric: "department_comparison",
+              period: String(item.department ?? ""),
+              value: Number(item.value ?? 0),
+            })),
+            ...((analytics?.rating_distribution as Array<Record<string, unknown>> | undefined) ?? []).map((item, index) => ({
+              row: index + 1,
+              metric: "rating_distribution",
+              period: String(item.label ?? ""),
+              value: Number(item.count ?? 0),
+            })),
+            ...((analytics?.checkin_consistency as Array<Record<string, unknown>> | undefined) ?? []).map((item, index) => ({
+              row: index + 1,
+              metric: "checkin_consistency",
+              period: String(item.week ?? ""),
+              value: Number(item.value ?? 0),
+            })),
+          ]);
+        } else {
+          setReportRows(rows);
+        }
       }
 
       if (reportType === "attrition") {
@@ -389,3 +404,4 @@ export default function LeadershipReportsPage() {
     </motion.div>
   );
 }
+

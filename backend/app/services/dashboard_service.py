@@ -3,11 +3,14 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.checkin import Checkin
-from app.models.enums import CheckinStatus, RatingLabel, UserRole
+from app.models.checkin_rating import CheckinRating
+from app.models.enums import CheckinStatus, PerformanceCycleStatus, RatingLabel, UserRole
 from app.models.goal import Goal
+from app.models.meeting import Meeting
 from app.models.performance_review import PerformanceReview
 from app.models.rating import Rating
 from app.models.user import User
+from app.models.performance_cycle import PerformanceCycle
 
 
 class DashboardService:
@@ -18,6 +21,32 @@ class DashboardService:
         if score >= 50:
             return "Medium"
         return "Low"
+
+    @staticmethod
+    async def _employee_visible_rating_query(current_user: User, db: AsyncSession):
+        closed_or_locked = [PerformanceCycleStatus.closed, PerformanceCycleStatus.locked]
+        rating_stmt = (
+            select(Rating)
+            .outerjoin(PerformanceCycle, Rating.cycle_id == PerformanceCycle.id)
+            .where(
+                Rating.employee_id == current_user.id,
+                ((Rating.cycle_id.is_(None)) | (PerformanceCycle.status.in_(closed_or_locked))),
+            )
+            .order_by(Rating.created_at.desc())
+        )
+        checkin_rating_stmt = (
+            select(CheckinRating)
+            .outerjoin(PerformanceCycle, CheckinRating.cycle_id == PerformanceCycle.id)
+            .where(
+                CheckinRating.employee_id == current_user.id,
+                ((CheckinRating.cycle_id.is_(None)) | (PerformanceCycle.status.in_(closed_or_locked))),
+            )
+            .order_by(CheckinRating.created_at.desc())
+        )
+
+        ratings_result = await db.execute(rating_stmt)
+        checkin_ratings_result = await db.execute(checkin_rating_stmt)
+        return list(ratings_result.scalars().all()), list(checkin_ratings_result.scalars().all())
 
     @staticmethod
     async def _rating_distribution(filter_clause, db: AsyncSession) -> list[dict]:
@@ -46,31 +75,38 @@ class DashboardService:
     @staticmethod
     async def _weekly_velocity(user_id: str, db: AsyncSession) -> list[dict]:
         now = datetime.now(timezone.utc)
-        points: list[dict] = []
-        for idx in range(4):
-            end = now - timedelta(days=7 * (3 - idx))
-            start = end - timedelta(days=7)
-            result = await db.execute(
-                select(
-                    func.count(Checkin.id),
-                    func.coalesce(
-                        func.sum(
-                            case((Checkin.status.in_([CheckinStatus.submitted, CheckinStatus.reviewed]), 1), else_=0)
-                        ),
-                        0,
-                    ),
-                )
-                .where(
-                    and_(
-                        Checkin.employee_id == user_id,
-                        Checkin.meeting_date >= start,
-                        Checkin.meeting_date < end,
-                    )
+        
+        # Fetch all 4 weeks of checkins at once instead of separate queries
+        start_date = now - timedelta(days=28)  # 4 weeks back
+        checkins_result = await db.execute(
+            select(Checkin.meeting_date, Checkin.status)
+            .where(
+                and_(
+                    Checkin.employee_id == user_id,
+                    Checkin.meeting_date >= start_date,
+                    Checkin.meeting_date < now,
                 )
             )
-            total, completed = result.one()
+        )
+        checkins = list(checkins_result.all())
+
+        # Group by week index in Python
+        weekly_stats = defaultdict(lambda: {"total": 0, "completed": 0})
+        for meeting_date, status in checkins:
+            idx = int((now - meeting_date).days / 7)
+            if 0 <= idx < 4:
+                weekly_stats[idx]["total"] += 1
+                if status in [CheckinStatus.submitted, CheckinStatus.reviewed]:
+                    weekly_stats[idx]["completed"] += 1
+
+        points: list[dict] = []
+        for idx in range(4):
+            stats = weekly_stats.get(idx, {})
+            total = stats.get("total", 0)
+            completed = stats.get("completed", 0)
             score = (float(completed) / float(total) * 100.0) if total else 0.0
             points.append({"name": f"W{idx + 1}", "score": round(score, 1)})
+        
         return points
 
     @staticmethod
@@ -100,21 +136,6 @@ class DashboardService:
         goals_count, completed_goals, avg_progress = goals_result.one()
         active_goals = max(0, int(goals_count or 0) - int(completed_goals or 0))
 
-        ratings_result = await db.execute(
-            select(func.coalesce(func.avg(Rating.rating), 0), func.coalesce(func.max(Rating.created_at), None)).where(
-                Rating.employee_id == current_user.id
-            )
-        )
-        avg_rating, latest_rating_time = ratings_result.one()
-
-        latest_rating_result = await db.execute(
-            select(Rating.rating)
-            .where(Rating.employee_id == current_user.id)
-            .order_by(Rating.created_at.desc())
-            .limit(1)
-        )
-        latest_rating = float(latest_rating_result.scalar() or 0)
-
         checkins_count_result = await db.execute(
             select(func.count(Checkin.id), func.max(Checkin.created_at)).where(Checkin.employee_id == current_user.id)
         )
@@ -123,35 +144,34 @@ class DashboardService:
         now = datetime.now(timezone.utc)
         consistency_series: list[dict] = []
         progress_trend: list[dict] = []
-        rating_trend: list[dict] = []
+
+        # Fetch all 6 weeks of checkins at once
+        start_date = now - timedelta(days=42)  # 6 weeks back
+        checkins_bulk_result = await db.execute(
+            select(Checkin.created_at, Checkin.overall_progress)
+            .where(
+                Checkin.employee_id == current_user.id,
+                Checkin.created_at >= start_date,
+            )
+        )
+        checkins_bulk = list(checkins_bulk_result.all())
+
+        # Group by week index in Python
+        weekly_groups = defaultdict(lambda: {"count": 0, "progress_sum": 0.0})
+        for checkin_date, overall_progress in checkins_bulk:
+            idx = int((now - checkin_date).days / 7)
+            if 0 <= idx < 6:
+                weekly_groups[idx]["count"] += 1
+                weekly_groups[idx]["progress_sum"] += (overall_progress or 0)
 
         for idx in range(6):
-            end = now - timedelta(days=7 * (5 - idx))
-            start = end - timedelta(days=7)
             week_name = f"W{idx + 1}"
-
-            checkin_week_result = await db.execute(
-                select(func.count(Checkin.id), func.coalesce(func.avg(Checkin.progress), 0)).where(
-                    Checkin.employee_id == current_user.id,
-                    Checkin.created_at >= start,
-                    Checkin.created_at < end,
-                )
-            )
-            weekly_checkins, weekly_progress = checkin_week_result.one()
-            consistency_series.append({"week": week_name, "value": float(weekly_checkins or 0)})
-            progress_trend.append({"week": week_name, "value": round(float(weekly_progress or 0), 1)})
-
-            rating_week_result = await db.execute(
-                select(func.coalesce(func.avg(Rating.rating), 0)).where(
-                    Rating.employee_id == current_user.id,
-                    Rating.created_at >= start,
-                    Rating.created_at < end,
-                )
-            )
-            weekly_rating = float(rating_week_result.scalar() or 0)
-            rating_trend.append({"week": week_name, "value": round(weekly_rating, 2)})
-
-        distribution = await DashboardService._rating_distribution(Rating.employee_id == current_user.id, db)
+            group = weekly_groups.get(idx, {})
+            weekly_checkins = group.get("count", 0)
+            weekly_progress = (group.get("progress_sum", 0) / weekly_checkins) if weekly_checkins > 0 else 0
+            
+            consistency_series.append({"week": week_name, "value": float(weekly_checkins)})
+            progress_trend.append({"week": week_name, "value": round(float(weekly_progress), 1)})
 
         consistency_percent = 0.0
         if consistency_series:
@@ -172,8 +192,6 @@ class DashboardService:
             "progress": round(float(avg_progress or 0), 1),
             "completed_goals": int(completed_goals or 0),
             "active_goals": int(active_goals),
-            "avg_rating": round(float(avg_rating or 0), 2),
-            "latest_rating": round(float(latest_rating or 0), 2),
             "checkins_count": int(checkins_count or 0),
             "last_checkin": last_checkin,
             "consistency_percent": consistency_percent,
@@ -183,8 +201,6 @@ class DashboardService:
             "review_readiness": DashboardService._bucket_readiness(readiness_score),
             "checkin_status": checkin_status,
             "trend": progress_trend,
-            "ratings": rating_trend,
-            "distribution": distribution,
             "consistency": consistency_series,
         }
 
@@ -211,14 +227,19 @@ class DashboardService:
         total_checkins, completed_checkins = checkin_result.one()
         consistency = (float(completed_checkins) / float(total_checkins) * 100.0) if total_checkins else 0.0
 
-        ratings_count_result = await db.execute(select(func.count(Rating.id)).where(Rating.employee_id == current_user.id))
-        peer_signals = int(ratings_count_result.scalar() or 0)
+        visible_ratings, _ = await DashboardService._employee_visible_rating_query(current_user, db)
+        peer_signals = len(visible_ratings)
 
         readiness_score = (float(avg_progress or 0) * 0.65) + (consistency * 0.35)
 
         trend = await DashboardService._quarterly_trend(PerformanceReview.employee_id == current_user.id, db)
         velocity = await DashboardService._weekly_velocity(str(current_user.id), db)
-        distribution = await DashboardService._rating_distribution(Rating.employee_id == current_user.id, db)
+        label_counts = {label.value: 0 for label in RatingLabel}
+        for rating in visible_ratings:
+            label = rating.rating_label.value if hasattr(rating.rating_label, "value") else str(rating.rating_label)
+            if label in label_counts:
+                label_counts[label] += 1
+        distribution = [{"name": label, "value": label_counts[label]} for label in ["EE", "DE", "ME", "SME", "NI"]]
 
         return {
             "role": "employee",
@@ -281,15 +302,29 @@ class DashboardService:
         total_checkins, completed_checkins = checkin_result.one()
         consistency = (float(completed_checkins) / float(total_checkins) * 100.0) if total_checkins else 0.0
 
+        # Bulk query: get average goal progress per team member
+        goal_progress_result = await db.execute(
+            select(Goal.user_id, func.coalesce(func.avg(Goal.progress), 0).label("avg_progress"))
+            .where(Goal.user_id.in_(team_ids))
+            .group_by(Goal.user_id)
+        )
+        goal_progress_map = {row[0]: float(row[1]) for row in goal_progress_result.all()}
+
+        # Bulk query: get average rating per team member
+        rating_result = await db.execute(
+            select(Rating.employee_id, func.coalesce(func.avg(Rating.rating), 0).label("avg_rating"))
+            .where(Rating.employee_id.in_(team_ids))
+            .group_by(Rating.employee_id)
+        )
+        rating_map = {row[0]: float(row[1]) for row in rating_result.all()}
+
         heatmap: list[float] = []
         stack_ranking: list[dict] = []
         for member in team_members:
-            member_goal = await db.execute(select(func.coalesce(func.avg(Goal.progress), 0)).where(Goal.user_id == member.id))
-            progress = float(member_goal.scalar() or 0)
+            progress = goal_progress_map.get(member.id, 0.0)
             heatmap.append(round(progress, 1))
 
-            member_rating = await db.execute(select(func.coalesce(func.avg(Rating.rating), 0)).where(Rating.employee_id == member.id))
-            score = float(member_rating.scalar() or 0) * 20
+            score = (rating_map.get(member.id, 0.0) * 20)
             trend = "up" if score >= 80 else "flat" if score >= 60 else "down"
             stack_ranking.append({"name": member.name, "score": round(score, 1), "trend": trend})
 
@@ -384,3 +419,120 @@ class DashboardService:
             return await DashboardService.manager_overview(current_user, db)
 
         return await DashboardService.org_overview(current_user, db)
+
+    @staticmethod
+    async def employee_timeline(current_user: User, db: AsyncSession, limit: int = 100) -> list[dict]:
+        goals_result = await db.execute(
+            select(Goal)
+            .where(Goal.user_id == current_user.id)
+            .order_by(Goal.created_at.desc())
+            .limit(limit)
+        )
+        goals = list(goals_result.scalars().all())
+
+        checkins_result = await db.execute(
+            select(Checkin)
+            .where(Checkin.employee_id == current_user.id)
+            .order_by(Checkin.created_at.desc())
+            .limit(limit)
+        )
+        checkins = list(checkins_result.scalars().all())
+
+        meetings_result = await db.execute(
+            select(Meeting)
+            .where(Meeting.employee_id == current_user.id)
+            .order_by(Meeting.start_time.desc())
+            .limit(limit)
+        )
+        meetings = list(meetings_result.scalars().all())
+
+        ratings, checkin_ratings = await DashboardService._employee_visible_rating_query(current_user, db)
+        ratings = ratings[:limit]
+        checkin_ratings = checkin_ratings[:limit]
+
+        items: list[dict] = []
+
+        for goal in goals:
+            items.append(
+                {
+                    "entity_type": "goal",
+                    "entity_id": str(goal.id),
+                    "cycle_id": str(goal.cycle_id) if goal.cycle_id else None,
+                    "occurred_at": goal.created_at,
+                    "title": goal.title,
+                    "status": goal.status.value if hasattr(goal.status, "value") else str(goal.status),
+                    "metadata": {
+                        "progress": round(float(goal.progress or 0), 1),
+                        "weightage": round(float(goal.weightage or 0), 1),
+                    },
+                }
+            )
+
+        for checkin in checkins:
+            items.append(
+                {
+                    "entity_type": "checkin",
+                    "entity_id": str(checkin.id),
+                    "cycle_id": str(checkin.cycle_id) if checkin.cycle_id else None,
+                    "occurred_at": checkin.created_at,
+                    "title": "Unified employee check-in",
+                    "status": checkin.status.value if hasattr(checkin.status, "value") else str(checkin.status),
+                    "metadata": {
+                        "overall_progress": int(checkin.overall_progress or 0),
+                        "goals_count": len(checkin.goal_ids or []),
+                        "summary": (checkin.summary or "")[:160] if checkin.summary else None,
+                    },
+                }
+            )
+
+        for meeting in meetings:
+            items.append(
+                {
+                    "entity_type": "meeting",
+                    "entity_id": str(meeting.id),
+                    "cycle_id": str(meeting.cycle_id) if meeting.cycle_id else None,
+                    "occurred_at": meeting.start_time,
+                    "title": meeting.title,
+                    "status": meeting.status.value if hasattr(meeting.status, "value") else str(meeting.status),
+                    "metadata": {
+                        "meeting_type": meeting.meeting_type.value if hasattr(meeting.meeting_type, "value") else str(meeting.meeting_type),
+                        "goal_id": str(meeting.goal_id) if meeting.goal_id else None,
+                    },
+                }
+            )
+
+        for rating in ratings:
+            items.append(
+                {
+                    "entity_type": "rating",
+                    "entity_id": str(rating.id),
+                    "cycle_id": str(rating.cycle_id) if rating.cycle_id else None,
+                    "occurred_at": rating.created_at,
+                    "title": f"Goal rating: {rating.rating}/5",
+                    "status": "published",
+                    "metadata": {
+                        "rating": int(rating.rating),
+                        "label": rating.rating_label.value if hasattr(rating.rating_label, "value") else str(rating.rating_label),
+                        "goal_id": str(rating.goal_id),
+                    },
+                }
+            )
+
+        for checkin_rating in checkin_ratings:
+            items.append(
+                {
+                    "entity_type": "checkin_rating",
+                    "entity_id": str(checkin_rating.id),
+                    "cycle_id": str(checkin_rating.cycle_id) if checkin_rating.cycle_id else None,
+                    "occurred_at": checkin_rating.created_at,
+                    "title": f"Check-in rating: {checkin_rating.rating}/5",
+                    "status": "published",
+                    "metadata": {
+                        "rating": int(checkin_rating.rating),
+                        "checkin_id": str(checkin_rating.checkin_id),
+                    },
+                }
+            )
+
+        items.sort(key=lambda item: item["occurred_at"], reverse=True)
+        return items[:limit]

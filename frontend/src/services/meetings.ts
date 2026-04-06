@@ -8,6 +8,7 @@ interface MeetingPayload {
   start_time: string;
   end_time: string;
   participants: string[];
+  checkin_id?: string;
   goal_id?: string;
 }
 

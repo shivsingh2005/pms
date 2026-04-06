@@ -1,4 +1,4 @@
-import { CalendarCheck2, Files, LayoutDashboard, Network, Users, UsersRound } from "lucide-react";
+import { BarChartHorizontal, LayoutDashboard, Trophy, Users, Video, FileText } from "lucide-react";
 import { SidebarItem } from "@/components/navigation/SidebarItem";
 
 interface HRSidebarProps {
@@ -7,12 +7,12 @@ interface HRSidebarProps {
 }
 
 const hrNavItems = [
-  { href: "/hr-dashboard", label: "HR Dashboard", icon: LayoutDashboard },
+  { href: "/hr/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/hr/employee-directory", label: "Employee Directory", icon: Users },
-  { href: "/hr/manager-team", label: "Manager -> Team View", icon: Network },
-  { href: "/hr/calibration", label: "Calibration", icon: UsersRound },
-  { href: "/hr/meetings", label: "Meetings", icon: CalendarCheck2 },
-  { href: "/hr/reports", label: "Reports", icon: Files },
+  { href: "/hr/analytics", label: "Analytics", icon: BarChartHorizontal },
+  { href: "/hr/calibration", label: "Calibration", icon: Trophy },
+  { href: "/meetings", label: "Meetings", icon: Video },
+  { href: "/hr/reports", label: "Reports", icon: FileText },
 ] as const;
 
 export function HRSidebar({ pathname, collapsed }: HRSidebarProps) {

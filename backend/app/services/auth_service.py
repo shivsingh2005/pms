@@ -1,4 +1,5 @@
 from uuid import uuid4
+from datetime import datetime, timezone
 import logging
 from sqlalchemy import select
 from sqlalchemy import func
@@ -45,6 +46,14 @@ class AuthService:
                 role=user.role,
                 email=user.email,
                 roles=resolved_roles,
+                domain=user.domain,
+                business_unit=user.business_unit,
+                department=user.department,
+                title=user.title,
+                manager_id=user.manager_id,
+                first_login=user.first_login,
+                onboarding_complete=user.onboarding_complete,
+                last_active=user.last_active.isoformat() if user.last_active else None,
             ),
             user_id=user.id,
             name=user.name,
@@ -106,10 +115,18 @@ class AuthService:
                 role=UserRole.employee,
                 roles=[UserRole.employee.value],
                 organization_id=org.id,
+                domain=domain,
+                first_login=True,
+                onboarding_complete=False,
+                last_active=datetime.now(timezone.utc),
                 is_active=True,
             )
             db.add(user)
             await db.commit()
             await db.refresh(user)
+
+        user.last_active = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(user)
 
         return await AuthService._build_token_response(user)

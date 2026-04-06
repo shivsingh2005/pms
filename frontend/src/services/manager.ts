@@ -2,6 +2,7 @@ import { api } from "@/services/api";
 import type {
   ManagerEmployeeInspection,
   ManagerPendingCheckin,
+  ManagerStackRankingPayload,
   ManagerTeamMember,
   ManagerTeamPerformancePayload,
   Meeting,
@@ -9,24 +10,40 @@ import type {
 } from "@/types";
 
 export const managerService = {
-  async getTeam() {
-    const { data } = await api.get<ManagerTeamMember[]>("/manager/team");
+  async getDashboard(managerId: string, options?: { silent?: boolean }) {
+    const { data } = await api.get<ManagerTeamPerformancePayload>("/manager/dashboard", {
+      params: { managerId },
+      ...(options?.silent ? ({ skipErrorToast: true } as object) : {}),
+    });
+    return data;
+  },
+  async getTeam(options?: { silent?: boolean }) {
+    const { data } = await api.get<ManagerTeamMember[]>("/manager/team", options?.silent ? ({ skipErrorToast: true } as object) : undefined);
     return data;
   },
   async inspectEmployee(employeeId: string) {
     const { data } = await api.get<ManagerEmployeeInspection>(`/manager/employee/${employeeId}`);
     return data;
   },
-  async getTeamPerformance() {
-    const { data } = await api.get<ManagerTeamPerformancePayload>("/manager/team-performance");
+  async getTeamPerformance(options?: { silent?: boolean }) {
+    const { data } = await api.get<ManagerTeamPerformancePayload>("/manager/team-performance", options?.silent ? ({ skipErrorToast: true } as object) : undefined);
     return data;
   },
-  async getPendingCheckins() {
-    const { data } = await api.get<ManagerPendingCheckin[]>("/manager/checkins");
+  async getStackRanking(payload?: {
+    sort_by?: "progress" | "rating" | "consistency";
+    order?: "asc" | "desc";
+    at_risk_only?: boolean;
+    limit?: number;
+  }) {
+    const { data } = await api.get<ManagerStackRankingPayload>("/manager/stack-ranking", { params: payload });
     return data;
   },
-  async getPendingMeetingProposals() {
-    const { data } = await api.get<MeetingProposal[]>("/meetings/proposals/pending");
+  async getPendingCheckins(options?: { silent?: boolean }) {
+    const { data } = await api.get<ManagerPendingCheckin[]>("/manager/checkins", options?.silent ? ({ skipErrorToast: true } as object) : undefined);
+    return data;
+  },
+  async getPendingMeetingProposals(options?: { silent?: boolean }) {
+    const { data } = await api.get<MeetingProposal[]>("/meetings/proposals/pending", options?.silent ? ({ skipErrorToast: true } as object) : undefined);
     return data;
   },
   async approveMeetingProposal(proposalId: string) {

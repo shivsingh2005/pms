@@ -11,8 +11,15 @@ import { Input } from "@/components/ui/input";
 import { managerService } from "@/services/manager";
 import { meetingsService } from "@/services/meetings";
 import { checkinsService } from "@/services/checkins";
+import { aiService } from "@/services/ai";
 import { useSessionStore } from "@/store/useSessionStore";
-import type { Meeting, MeetingProposal } from "@/types";
+import type {
+  AIFeedbackCoachingResult,
+  CheckinRatingRecommendation,
+  CheckinTranscriptIngestResult,
+  Meeting,
+  MeetingProposal,
+} from "@/types";
 
 type RatingDraft = { rating: number; feedback: string };
 
@@ -24,6 +31,10 @@ export default function ManagerApprovalsPage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [rejectSuggestionByProposal, setRejectSuggestionByProposal] = useState<Record<string, string>>({});
   const [ratingsByCheckin, setRatingsByCheckin] = useState<Record<string, RatingDraft>>({});
+  const [transcriptByCheckin, setTranscriptByCheckin] = useState<Record<string, string>>({});
+  const [transcriptInsightsByCheckin, setTranscriptInsightsByCheckin] = useState<Record<string, CheckinTranscriptIngestResult>>({});
+  const [recommendationByCheckin, setRecommendationByCheckin] = useState<Record<string, CheckinRatingRecommendation>>({});
+  const [coachingByCheckin, setCoachingByCheckin] = useState<Record<string, AIFeedbackCoachingResult>>({});
 
   const load = async () => {
     const [pendingProposals, allMeetings] = await Promise.all([
@@ -105,6 +116,63 @@ export default function ManagerApprovalsPage() {
     }
   };
 
+  const ingestTranscript = async (checkinId: string) => {
+    const transcript = (transcriptByCheckin[checkinId] || "").trim();
+    if (transcript.length < 10) {
+      toast.error("Transcript must be at least 10 characters");
+      return;
+    }
+
+    try {
+      const output = await checkinsService.ingestTranscript(checkinId, transcript);
+      setTranscriptInsightsByCheckin((prev) => ({ ...prev, [checkinId]: output }));
+      toast.success("Transcript ingested and goal summaries updated");
+    } catch {
+      toast.error("Failed to ingest transcript");
+    }
+  };
+
+  const loadRatingRecommendation = async (checkinId: string) => {
+    try {
+      const recommendation = await checkinsService.getRatingRecommendation(checkinId);
+      setRecommendationByCheckin((prev) => ({ ...prev, [checkinId]: recommendation }));
+      setRatingsByCheckin((prev) => ({
+        ...prev,
+        [checkinId]: {
+          ...(prev[checkinId] ?? { rating: 4, feedback: "" }),
+          rating: recommendation.suggested_rating,
+        },
+      }));
+      toast.success("Rating recommendation applied. You can still override it.");
+    } catch {
+      toast.error("Failed to load rating recommendation");
+    }
+  };
+
+  const coachFeedback = async (checkinId: string) => {
+    const draft = ratingsByCheckin[checkinId] ?? { rating: 4, feedback: "" };
+    const input = draft.feedback.trim();
+    if (!input) {
+      toast.error("Enter feedback text first");
+      return;
+    }
+
+    try {
+      const coaching = await aiService.coachFeedback(input);
+      setCoachingByCheckin((prev) => ({ ...prev, [checkinId]: coaching }));
+      setRatingsByCheckin((prev) => ({
+        ...prev,
+        [checkinId]: {
+          ...(prev[checkinId] ?? { rating: 4, feedback: "" }),
+          feedback: coaching.suggested_version,
+        },
+      }));
+      toast.success(`Feedback coached (tone score ${coaching.tone_score}/10)`);
+    } catch {
+      toast.error("Failed to coach feedback");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -156,6 +224,28 @@ export default function ManagerApprovalsPage() {
                 <p className="text-sm font-medium">Meeting: {meeting.title}</p>
                 <p className="text-xs text-muted-foreground">Check-in: {checkinId}</p>
                 <p className="text-xs text-muted-foreground">Ended: {new Date(meeting.end_time).toLocaleString()}</p>
+
+                <div className="space-y-2 rounded-md border border-border/70 p-3">
+                  <label className="text-xs text-muted-foreground">Transcript (manual paste or synced notes)</label>
+                  <Textarea
+                    value={transcriptByCheckin[checkinId] || ""}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setTranscriptByCheckin((prev) => ({ ...prev, [checkinId]: value }));
+                    }}
+                    placeholder="Paste transcript to auto-generate check-in summary and goal-level notes"
+                  />
+                  <Button size="sm" variant="outline" onClick={() => ingestTranscript(checkinId)}>
+                    Ingest Transcript and Map to Goals
+                  </Button>
+                  {transcriptInsightsByCheckin[checkinId] ? (
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      <p className="font-medium text-foreground">AI Summary</p>
+                      <p>{transcriptInsightsByCheckin[checkinId].summary}</p>
+                    </div>
+                  ) : null}
+                </div>
+
                 <div className="space-y-1">
                   <label className="text-xs text-muted-foreground">Rating (1-5)</label>
                   <Input
@@ -180,7 +270,34 @@ export default function ManagerApprovalsPage() {
                     placeholder="Add qualitative feedback"
                   />
                 </div>
-                <Button size="sm" onClick={() => submitRating(checkinId)}>Submit Rating</Button>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={() => loadRatingRecommendation(checkinId)}>
+                    Get AI Rating Recommendation
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => coachFeedback(checkinId)}>
+                    Coach Feedback Tone
+                  </Button>
+                  <Button size="sm" onClick={() => submitRating(checkinId)}>Submit Rating</Button>
+                </div>
+
+                {recommendationByCheckin[checkinId] ? (
+                  <div className="space-y-1 rounded-md border border-border/70 p-3 text-xs text-muted-foreground">
+                    <p className="font-medium text-foreground">
+                      Suggested Rating: {recommendationByCheckin[checkinId].suggested_rating}/5
+                      {" "}(confidence {Math.round(recommendationByCheckin[checkinId].confidence * 100)}%)
+                    </p>
+                    {recommendationByCheckin[checkinId].rationale.map((line, idx) => (
+                      <p key={`${checkinId}-rationale-${idx}`}>{line}</p>
+                    ))}
+                  </div>
+                ) : null}
+
+                {coachingByCheckin[checkinId] ? (
+                  <p className="text-xs text-muted-foreground">
+                    Coaching applied. Tone score: {coachingByCheckin[checkinId].tone_score}/10
+                  </p>
+                ) : null}
               </div>
             );
           })

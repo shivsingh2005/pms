@@ -172,3 +172,27 @@ class HRMeetingSummaryOut(BaseModel):
     summary: str
 
 
+class HRNineBoxCellOut(BaseModel):
+    employee_id: str
+    employee_name: str
+    performance_axis: str
+    potential_axis: str
+    box_label: str
+    performance_score: float
+    potential_score: float
+
+
+class HRNineBoxOut(BaseModel):
+    rows: list[HRNineBoxCellOut]
+
+
+class HRSuccessionOut(BaseModel):
+    employee_id: str
+    employee_name: str
+    target_role: str
+    readiness_score: float
+    readiness_level: str
+    gaps: list[str]
+    development_plan: str | None = None
+
+

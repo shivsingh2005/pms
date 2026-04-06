@@ -24,6 +24,7 @@ interface SessionState {
   isAuthLoading: boolean;
   activeMode: UserMode | null;
   setUser: (user: User | null) => void;
+  patchUser: (patch: Partial<User>) => void;
   setAuthLoading: (loading: boolean) => void;
   setActiveMode: (mode: UserMode) => void;
   logout: () => void;
@@ -47,6 +48,13 @@ export const useSessionStore = create<SessionState>()(
         const nextMode = previousMode && canUseMode(user, previousMode) ? previousMode : defaultMode;
 
         set({ user, isAuthenticated: true, activeMode: nextMode });
+      },
+      patchUser: (patch) => {
+        const current = get().user;
+        if (!current) {
+          return;
+        }
+        set({ user: { ...current, ...patch } });
       },
       setAuthLoading: (loading) => set({ isAuthLoading: loading }),
       setActiveMode: (mode) => {

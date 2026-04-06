@@ -186,3 +186,4 @@ export default function LeadershipPerformanceTrendsPage() {
     </motion.div>
   );
 }
+

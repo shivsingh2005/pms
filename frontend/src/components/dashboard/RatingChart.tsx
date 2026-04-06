@@ -12,7 +12,7 @@ export function RatingChart({ data }: RatingChartProps) {
     <ChartCard
       title="Rating Trend"
       description="Weekly average rating progression"
-      className="rounded-2xl border border-border/75 bg-card/95"
+      className="rounded-xl border border-border bg-card"
     >
       <MetricChart kind="bar" data={data} xKey="week" yKey="value" color="hsl(var(--warning))" />
     </ChartCard>

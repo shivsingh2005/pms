@@ -9,10 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.gemini_client import GeminiClient, GeminiClientError
 from app.models.checkin import Checkin
 from app.models.checkin_rating import CheckinRating
+from app.models.employee_9box import Employee9Box
 from app.models.enums import CheckinStatus, UserRole
 from app.models.goal import Goal
 from app.models.meeting import Meeting
 from app.models.rating import Rating
+from app.models.succession_planning import SuccessionPlanning
+from app.models.ai_usage import AIUsage
 from app.models.user import User
 
 
@@ -286,7 +289,7 @@ class HRService:
         trend_by_week: dict[str, list[float]] = defaultdict(list)
         for checkin in checkins:
             key = checkin.created_at.strftime("%Y-W%W")
-            trend_by_week[key].append(float(checkin.progress))
+            trend_by_week[key].append(float(checkin.overall_progress))
 
         performance_trend = [
             {"week": week, "progress": round(sum(values) / len(values), 1)}
@@ -311,7 +314,7 @@ class HRService:
             "checkins": [
                 {
                     "id": str(item.id),
-                    "progress": int(item.progress),
+                    "progress": int(item.overall_progress),
                     "status": item.status.value,
                     "summary": item.summary,
                     "manager_feedback": item.manager_feedback,
@@ -419,7 +422,7 @@ class HRService:
         )
 
         consistency_rows = await db.execute(
-            select(checkin_week_bucket, func.avg(Checkin.progress))
+            select(checkin_week_bucket, func.avg(Checkin.overall_progress))
             .join(User, Checkin.employee_id == User.id)
             .where(User.organization_id == current_user.organization_id)
             .group_by(checkin_week_bucket)
@@ -720,4 +723,163 @@ class HRService:
             f"{at_risk} employees are at risk.",
             f"{needs_attention} employees need attention and {on_track} are on track.",
             f"Average goal completion is {avg_progress}% with consistency at {avg_consistency}%.",
+        ]
+
+    @staticmethod
+    def _axis_from_performance(score: float) -> str:
+        if score < 2.5:
+            return "Low"
+        if score <= 4.0:
+            return "Medium"
+        return "High"
+
+    @staticmethod
+    def _axis_from_potential(score: float) -> str:
+        if score < 0.35:
+            return "Low"
+        if score <= 0.65:
+            return "Medium"
+        return "High"
+
+    @staticmethod
+    def _box_label(performance_axis: str, potential_axis: str) -> str:
+        mapping = {
+            ("High", "High"): "Star",
+            ("High", "Medium"): "High Performer",
+            ("High", "Low"): "Solid Contributor",
+            ("Medium", "High"): "Growth Potential",
+            ("Medium", "Medium"): "Core Player",
+            ("Medium", "Low"): "Inconsistent",
+            ("Low", "High"): "Question Mark",
+            ("Low", "Medium"): "Needs Development",
+            ("Low", "Low"): "Risk",
+        }
+        return mapping.get((performance_axis, potential_axis), "Core Player")
+
+    @staticmethod
+    async def compute_9box(current_user: User, db: AsyncSession) -> dict:
+        employees_result = await db.execute(
+            select(User)
+            .where(
+                User.organization_id == current_user.organization_id,
+                User.role == UserRole.employee,
+                User.is_active.is_(True),
+            )
+            .order_by(User.name.asc())
+        )
+        employees = list(employees_result.scalars().all())
+
+        payload_rows: list[dict] = []
+        for employee in employees:
+            rating_avg_result = await db.execute(select(func.avg(Rating.rating)).where(Rating.employee_id == employee.id))
+            performance_score = float(rating_avg_result.scalar() or 0.0)
+            performance_axis = HRService._axis_from_performance(performance_score)
+
+            trend_score = 0.5
+            ratings_result = await db.execute(
+                select(Rating.rating)
+                .where(Rating.employee_id == employee.id)
+                .order_by(Rating.created_at.asc())
+            )
+            ratings = [float(row) for row in ratings_result.scalars().all() if row is not None]
+            if len(ratings) >= 2:
+                delta = ratings[-1] - ratings[0]
+                trend_score = max(0.0, min(1.0, 0.5 + (delta / 4.0)))
+
+            checkin_count_result = await db.execute(select(func.count(Checkin.id)).where(Checkin.employee_id == employee.id))
+            completed_checkin_result = await db.execute(
+                select(func.count(Checkin.id)).where(
+                    Checkin.employee_id == employee.id,
+                    Checkin.status.in_([CheckinStatus.submitted, CheckinStatus.reviewed]),
+                )
+            )
+            total_checkins = int(checkin_count_result.scalar() or 0)
+            completed_checkins = int(completed_checkin_result.scalar() or 0)
+            consistency = (completed_checkins / total_checkins) if total_checkins else 0.0
+
+            goal_completion_result = await db.execute(select(func.avg(Goal.progress)).where(Goal.user_id == employee.id))
+            goal_completion_rate = max(0.0, min(float(goal_completion_result.scalar() or 0.0) / 100.0, 1.0))
+
+            growth_signal_result = await db.execute(
+                select(func.coalesce(func.max(AIUsage.usage_count), 0)).where(
+                    AIUsage.user_id == employee.id,
+                    AIUsage.feature_name.in_(["career_growth", "growth_recommend"]),
+                )
+            )
+            growth_signal_raw = float(growth_signal_result.scalar() or 0.0)
+            growth_signal = max(0.0, min(growth_signal_raw / 3.0, 1.0))
+
+            potential_score = (
+                trend_score * 0.4
+                + consistency * 0.3
+                + goal_completion_rate * 0.2
+                + growth_signal * 0.1
+            )
+            potential_axis = HRService._axis_from_potential(potential_score)
+            box_label = HRService._box_label(performance_axis, potential_axis)
+
+            existing_result = await db.execute(
+                select(Employee9Box)
+                .where(Employee9Box.employee_id == employee.id)
+                .order_by(Employee9Box.computed_at.desc())
+                .limit(1)
+            )
+            existing = existing_result.scalar_one_or_none()
+            if existing:
+                existing.performance_axis = performance_axis
+                existing.potential_axis = potential_axis
+                existing.box_label = box_label
+                existing.performance_score = performance_score
+                existing.potential_score = round(potential_score, 3)
+            else:
+                db.add(
+                    Employee9Box(
+                        employee_id=employee.id,
+                        performance_axis=performance_axis,
+                        potential_axis=potential_axis,
+                        box_label=box_label,
+                        performance_score=performance_score,
+                        potential_score=round(potential_score, 3),
+                    )
+                )
+
+            payload_rows.append(
+                {
+                    "employee_id": str(employee.id),
+                    "employee_name": employee.name,
+                    "performance_axis": performance_axis,
+                    "potential_axis": potential_axis,
+                    "box_label": box_label,
+                    "performance_score": round(performance_score, 2),
+                    "potential_score": round(potential_score, 3),
+                }
+            )
+
+        await db.commit()
+        return {"rows": payload_rows}
+
+    @staticmethod
+    async def get_succession(current_user: User, db: AsyncSession, target_role: str | None = None) -> list[dict]:
+        stmt = (
+            select(SuccessionPlanning, User.name)
+            .join(User, SuccessionPlanning.employee_id == User.id)
+            .where(User.organization_id == current_user.organization_id)
+            .order_by(SuccessionPlanning.readiness_score.desc())
+        )
+        if target_role:
+            stmt = stmt.where(SuccessionPlanning.target_role == target_role)
+
+        result = await db.execute(stmt)
+        rows = result.all()
+        return [
+            {
+                "employee_id": str(item.employee_id),
+                "employee_name": employee_name,
+                "target_role": item.target_role,
+                "readiness_score": round(float(item.readiness_score), 2),
+                "readiness_level": item.readiness_level,
+                "gaps": list(item.gaps or []),
+                "development_plan": item.development_plan,
+            }
+            for item, employee_name in rows
         ]

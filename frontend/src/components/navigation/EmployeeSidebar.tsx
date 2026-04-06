@@ -1,4 +1,4 @@
-import { CalendarCheck, ClipboardList, LayoutDashboard, Sparkles, Target } from "lucide-react";
+import { CalendarCheck, LayoutDashboard, Sparkles, Target, Video, ClipboardList } from "lucide-react";
 import { SidebarItem } from "@/components/navigation/SidebarItem";
 
 interface EmployeeSidebarProps {
@@ -7,11 +7,12 @@ interface EmployeeSidebarProps {
 }
 
 const employeeNavItems = [
-  { href: "/employee-dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/employee/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/goals", label: "My Goals", icon: Target },
   { href: "/employee/checkins", label: "Check-ins", icon: CalendarCheck },
-  { href: "/reviews", label: "Reviews", icon: ClipboardList },
-  { href: "/employee-dashboard?panel=ai-assistant", label: "AI Assistant", icon: Sparkles },
+  { href: "/employee/meetings", label: "Meetings", icon: Video },
+  { href: "/employee/reviews", label: "My Reviews", icon: ClipboardList },
+  { href: "/employee/growth", label: "Growth Hub", icon: Sparkles },
 ] as const;
 
 export function EmployeeSidebar({ pathname, collapsed }: EmployeeSidebarProps) {

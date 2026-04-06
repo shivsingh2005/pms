@@ -10,6 +10,7 @@ class Meeting(Base, UUIDMixin):
     __tablename__ = "meetings"
 
     title: Mapped[str] = mapped_column(String, nullable=False)
+    cycle_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), ForeignKey("performance_cycles.id"), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     organizer_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     checkin_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), ForeignKey("checkins.id"), nullable=True, index=True)
@@ -27,6 +28,10 @@ class Meeting(Base, UUIDMixin):
     meet_link: Mapped[str | None] = mapped_column(String, nullable=True)
     google_meet_link: Mapped[str | None] = mapped_column(String, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_action_items: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    goal_discussion_notes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     participants: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     status: Mapped[MeetingStatus] = mapped_column(
         Enum(MeetingStatus, name="meeting_status"),

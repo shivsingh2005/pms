@@ -15,6 +15,14 @@ interface TokenResponse {
     role: UserRole;
     email?: string;
     roles?: UserRole[];
+    manager_id?: string | null;
+    domain?: string | null;
+    business_unit?: string | null;
+    department?: string | null;
+    title?: string | null;
+    first_login?: boolean;
+    onboarding_complete?: boolean;
+    last_active?: string | null;
   };
 }
 
@@ -72,5 +80,8 @@ export const authService = {
   async getGoogleConnectionStatus() {
     const { data } = await api.get<GoogleConnectionStatusResponse>("/auth/google/status");
     return data;
+  },
+  async completeOnboarding() {
+    await api.post("/auth/onboarding/complete");
   },
 };

@@ -152,21 +152,21 @@ async def reseed() -> None:
         await db.flush()
 
         # Core users
-        admin = User(
+        executive_lead = User(
             id=uuid4(),
-            google_id=f"seed-admin-{uuid4()}",
-            email="admin@structured.mock",
+            google_id=f"seed-leadership-root-{uuid4()}",
+            email="executive@structured.mock",
             name="Arjun Mehta",
             profile_picture=None,
-            role=UserRole.admin,
-            roles=_roles_for_user(UserRole.admin),
+            role=UserRole.leadership,
+            roles=_roles_for_user(UserRole.leadership),
             organization_id=org.id,
             manager_id=None,
             department="Executive",
-            title="Admin",
+            title="Executive Director",
             is_active=True,
         )
-        db.add(admin)
+        db.add(executive_lead)
         await db.flush()
 
         leadership = User(
@@ -178,7 +178,7 @@ async def reseed() -> None:
             role=UserRole.leadership,
             roles=_roles_for_user(UserRole.leadership),
             organization_id=org.id,
-            manager_id=admin.id,
+            manager_id=executive_lead.id,
             department="Executive",
             title="Business Head",
             is_active=True,
@@ -194,7 +194,7 @@ async def reseed() -> None:
             role=UserRole.hr,
             roles=_roles_for_user(UserRole.hr),
             organization_id=org.id,
-            manager_id=admin.id,
+            manager_id=executive_lead.id,
             department="HR",
             title="HRBP",
             is_active=True,
@@ -288,7 +288,7 @@ async def reseed() -> None:
         await db.flush()
 
         # Mirror users to employees table for employee-directory style modules.
-        all_people = [admin, leadership, hr, *managers, *employees]
+        all_people = [executive_lead, leadership, hr, *managers, *employees]
         employee_rows: list[Employee] = []
         for idx, person in enumerate(all_people, start=1):
             employee_rows.append(
@@ -331,29 +331,37 @@ async def reseed() -> None:
                 goals_by_employee[str(employee.id)].append(goal)
         await db.flush()
 
-        # Check-ins: 5-8 per employee
+        # Unified check-ins: one per employee for the active seeded cycle
         now = datetime.now(timezone.utc)
         for employee in employees:
-            total_checkins = rng.randint(5, 8)
             employee_goals = goals_by_employee[str(employee.id)]
-            for _ in range(total_checkins):
-                chosen_goal = rng.choice(employee_goals)
-                checkin = Checkin(
-                    id=uuid4(),
-                    goal_id=chosen_goal.id,
-                    employee_id=employee.id,
-                    manager_id=employee.manager_id,
-                    meeting_date=now - timedelta(days=rng.randint(0, 59), hours=rng.randint(0, 23)),
-                    status=CheckinStatus.reviewed,
-                    meeting_link=None,
-                    transcript="Discussed weekly execution blockers and follow-up actions.",
-                    summary=rng.choice(CHECKIN_SNIPPETS),
-                    created_at=now - timedelta(days=rng.randint(0, 59)),
-                    progress=int(chosen_goal.progress),
-                    blockers="",
-                    next_steps="Continue milestone execution for current sprint.",
-                )
-                db.add(checkin)
+            average_progress = int(sum(float(goal.progress or 0) for goal in employee_goals) / max(len(employee_goals), 1))
+            checkin = Checkin(
+                id=uuid4(),
+                cycle_id=None,
+                goal_ids=[goal.id for goal in employee_goals],
+                goal_updates=[
+                    {
+                        "goal_id": str(goal.id),
+                        "progress": int(goal.progress or 0),
+                        "note": "Seeded consolidated update",
+                    }
+                    for goal in employee_goals
+                ],
+                employee_id=employee.id,
+                manager_id=employee.manager_id,
+                meeting_date=now - timedelta(days=rng.randint(0, 14), hours=rng.randint(0, 23)),
+                status=CheckinStatus.reviewed,
+                meeting_link=None,
+                transcript="Discussed weekly execution blockers and follow-up actions.",
+                summary=rng.choice(CHECKIN_SNIPPETS),
+                achievements="Delivered sprint milestones for assigned goals.",
+                created_at=now - timedelta(days=rng.randint(0, 14)),
+                overall_progress=average_progress,
+                blockers="",
+                confidence_level=rng.randint(3, 5),
+            )
+            db.add(checkin)
         await db.flush()
 
         # Ratings: 2-4 manager ratings per employee

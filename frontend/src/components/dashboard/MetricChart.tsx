@@ -14,7 +14,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-} from "recharts";
+} from "@/components/charts/recharts-lazy";
 
 interface MetricChartProps {
   kind: "area" | "bar" | "line";
@@ -27,22 +27,22 @@ interface MetricChartProps {
 }
 
 const CHART_COLORS = {
-  blue: "#4F46E5",
+  blue: "hsl(var(--primary))",
   purple: "#7C3AED",
   pink: "#EC4899",
   cyan: "#06B6D4",
-  green: "#10B981",
-  yellow: "#F59E0B",
-  red: "#EF4444",
+  green: "hsl(var(--success))",
+  yellow: "hsl(var(--warning))",
+  red: "hsl(var(--error))",
 };
 
 const chartTooltipStyle = {
   borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.12)",
-  backgroundColor: "rgba(17,24,39,0.95)",
-  color: "#E5E7EB",
+  border: "1px solid hsl(var(--border))",
+  backgroundColor: "hsl(var(--card))",
+  color: "hsl(var(--foreground))",
   padding: "10px 12px",
-  boxShadow: "0 10px 25px rgba(0,0,0,0.35)",
+  boxShadow: "var(--shadow-md)",
 };
 
 export function MetricChart({
@@ -57,9 +57,9 @@ export function MetricChart({
   if (!data.length) {
     return (
       <div
-        className={`h-64 rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.02)] p-4 flex items-center justify-center shadow-[0_10px_35px_rgba(0,0,0,0.22)] ${className ?? ""}`}
+        className={`h-64 rounded-xl border border-border bg-surface p-4 flex items-center justify-center shadow-soft ${className ?? ""}`}
       >
-        <p className="text-sm text-[#9CA3AF]">No Data Available</p>
+        <p className="text-sm text-muted-foreground">No data available</p>
       </div>
     );
   }
@@ -71,7 +71,7 @@ export function MetricChart({
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: "easeOut" }}
-      className={`h-64 rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.02)] p-4 flex items-center justify-center shadow-[0_10px_35px_rgba(0,0,0,0.22)] ${className ?? ""}`}
+      className={`h-64 rounded-xl border border-border bg-surface p-4 flex items-center justify-center shadow-soft ${className ?? ""}`}
     >
       <ResponsiveContainer width="100%" height="100%">
         {kind === "area" ? (
@@ -82,13 +82,13 @@ export function MetricChart({
                 <stop offset="100%" stopColor={CHART_COLORS.purple} stopOpacity={0.1} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 4" />
-            <XAxis dataKey={xKey} tickLine={false} axisLine={false} tick={{ fill: "#9CA3AF", fontSize: 12 }} />
-            <YAxis tickLine={false} axisLine={false} tick={{ fill: "#9CA3AF", fontSize: 12 }} />
+            <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 4" />
+            <XAxis dataKey={xKey} tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
+            <YAxis tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
             <Tooltip
-              cursor={{ stroke: "rgba(255,255,255,0.22)", strokeDasharray: "4 4" }}
+              cursor={{ stroke: "hsl(var(--border))", strokeDasharray: "4 4" }}
               contentStyle={chartTooltipStyle}
-              labelStyle={{ color: "#E5E7EB", fontWeight: 600, marginBottom: 4 }}
+              labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600, marginBottom: 4 }}
             />
             <Area type="monotone" dataKey={yKey} stroke={CHART_COLORS.blue} strokeWidth={3} fill={`url(#${gradientId})`} isAnimationActive animationDuration={700} />
           </AreaChart>
@@ -100,34 +100,34 @@ export function MetricChart({
                 <stop offset="100%" stopColor={CHART_COLORS.purple} />
               </linearGradient>
             </defs>
-            <CartesianGrid vertical={false} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 4" />
-            <XAxis dataKey={xKey} tickLine={false} axisLine={false} tick={{ fill: "#9CA3AF", fontSize: 12 }} />
-            <YAxis tickLine={false} axisLine={false} tick={{ fill: "#9CA3AF", fontSize: 12 }} />
+            <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 4" />
+            <XAxis dataKey={xKey} tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
+            <YAxis tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
             <Tooltip
-              cursor={{ stroke: "rgba(255,255,255,0.22)", strokeDasharray: "4 4" }}
+              cursor={{ stroke: "hsl(var(--border))", strokeDasharray: "4 4" }}
               contentStyle={chartTooltipStyle}
-              labelStyle={{ color: "#E5E7EB", fontWeight: 600, marginBottom: 4 }}
+              labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600, marginBottom: 4 }}
             />
             <Line
               type="monotone"
               dataKey={yKey}
               stroke={`url(#${gradientId})`}
               strokeWidth={3}
-              dot={{ r: 4, fill: CHART_COLORS.blue, stroke: "#A5B4FC", strokeWidth: 2, style: { filter: "drop-shadow(0 0 8px rgba(79,70,229,0.8))" } }}
-              activeDot={{ r: 6, fill: CHART_COLORS.purple, stroke: "#C4B5FD", strokeWidth: 2 }}
+              dot={{ r: 4, fill: CHART_COLORS.blue, stroke: "hsl(var(--card))", strokeWidth: 2 }}
+              activeDot={{ r: 6, fill: CHART_COLORS.purple, stroke: "hsl(var(--card))", strokeWidth: 2 }}
               isAnimationActive
               animationDuration={750}
             />
           </LineChart>
         ) : (
           <BarChart data={data}>
-            <CartesianGrid vertical={false} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 4" />
-            <XAxis dataKey={xKey} tickLine={false} axisLine={false} tick={{ fill: "#9CA3AF", fontSize: 12 }} />
-            <YAxis tickLine={false} axisLine={false} tick={{ fill: "#9CA3AF", fontSize: 12 }} />
+            <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 4" />
+            <XAxis dataKey={xKey} tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
+            <YAxis tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.06)" }}
+              cursor={{ fill: "hsl(var(--muted) / 0.4)" }}
               contentStyle={chartTooltipStyle}
-              labelStyle={{ color: "#E5E7EB", fontWeight: 600, marginBottom: 4 }}
+              labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600, marginBottom: 4 }}
             />
             <Bar dataKey={yKey} fill={color} radius={[8, 8, 8, 8]} isAnimationActive animationDuration={700}>
               {data.map((entry, index) => {
@@ -142,3 +142,4 @@ export function MetricChart({
     </motion.div>
   );
 }
+
