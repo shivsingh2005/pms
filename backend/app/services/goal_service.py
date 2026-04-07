@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import re
 from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -7,7 +8,7 @@ from app.ai.ai_service import AIService
 from app.models.annual_operating_plan import AnnualOperatingPlan
 from app.models.checkin import Checkin
 from app.models.enums import CheckinStatus, GoalStatus, UserRole
-from app.models.goal import Goal, GoalChangeLog, GoalLineage
+from app.models.goal import Goal, GoalApprovalHistory, GoalChangeLog, GoalLineage
 from app.models.goal_assignment import GoalAssignment
 from app.models.kpi_library import KPILibrary
 from app.models.performance_cycle import PerformanceCycle
@@ -21,14 +22,8 @@ class GoalService:
 
     @staticmethod
     def _role_key_from_text(value: str | None) -> str:
-        text = (value or "").strip().lower()
-        if not text:
-            return "others"
-        if any(token in text for token in ("frontend", "front-end", "ui", "react", "angular", "vue")):
-            return "frontend"
-        if any(token in text for token in ("backend", "back-end", "api", "server", "database", "db", "platform")):
-            return "backend"
-        return "others"
+        text = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower()).strip("-")
+        return text or "general"
 
     @staticmethod
     def _difficulty_from_weight(weight: float) -> str:
@@ -68,6 +63,58 @@ class GoalService:
             "assigned_by": str(goal.assigned_by) if goal.assigned_by else None,
             "assigned_to": str(goal.assigned_to) if goal.assigned_to else None,
         }
+
+    @staticmethod
+    def _is_waiting_manager_review(goal: Goal) -> bool:
+        return goal.status in {GoalStatus.pending_approval, GoalStatus.submitted}
+
+    @staticmethod
+    def _build_ai_assessment(goal: Goal) -> dict:
+        text = f"{goal.title or ''} {goal.description or ''}".lower()
+        measurable_tokens = ["%", "kpi", "reduce", "increase", "improve", "target", "deliver", "launch"]
+        measurable_hits = sum(1 for token in measurable_tokens if token in text)
+
+        clarity = min(1.0, round((len((goal.title or "").strip()) / 40.0), 2))
+        measurability = min(1.0, round(measurable_hits / 4.0, 2))
+        weight_fit = 1.0 if 5 <= float(goal.weightage) <= 60 else 0.7
+        quality = round((0.4 * clarity) + (0.4 * measurability) + (0.2 * weight_fit), 2)
+
+        recommendation = "approve"
+        if quality < 0.55:
+            recommendation = "request_edit"
+        elif quality < 0.75:
+            recommendation = "approve_with_note"
+
+        return {
+            "quality_score": quality,
+            "clarity_score": clarity,
+            "measurability_score": measurability,
+            "weightage_fit": weight_fit,
+            "recommendation": recommendation,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    @staticmethod
+    async def _add_approval_event(
+        goal: Goal,
+        action: str,
+        actor_id: UUID | None,
+        from_status: GoalStatus | None,
+        to_status: GoalStatus | None,
+        db: AsyncSession,
+        comment: str | None = None,
+        ai_assessment: dict | None = None,
+    ) -> None:
+        event = GoalApprovalHistory(
+            goal_id=goal.id,
+            actor_id=actor_id,
+            action=action,
+            from_status=from_status.value if from_status else None,
+            to_status=to_status.value if to_status else None,
+            comment=comment,
+            ai_assessment=ai_assessment,
+        )
+        db.add(event)
 
     @staticmethod
     async def _log_goal_change(
@@ -187,6 +234,7 @@ class GoalService:
     @staticmethod
     async def create_goal(current_user: User, payload: GoalCreate, db: AsyncSession) -> Goal:
         active_cycle_id = await GoalService._active_cycle_id_for_org(current_user.organization_id, db)
+        source_type = "self_created" if current_user.role == UserRole.employee else "manager_assigned"
         goal = Goal(
             cycle_id=active_cycle_id,
             user_id=current_user.id,
@@ -197,6 +245,7 @@ class GoalService:
             status=GoalStatus.draft,
             progress=payload.progress,
             framework=payload.framework,
+            source_type=source_type,
         )
         db.add(goal)
         await db.commit()
@@ -259,16 +308,31 @@ class GoalService:
         await ensure_cycle_writable(db, goal.cycle_id, locked_detail="Cannot submit goal in a locked cycle")
         if goal.user_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only owner can submit")
+        if goal.status not in {GoalStatus.draft, GoalStatus.edit_requested}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only draft or edit-requested goals can be submitted")
 
         before = GoalService._goal_snapshot(goal)
-        goal.status = GoalStatus.submitted
-        await GoalService._log_goal_change(goal.id, current_user.id, "submitted", before, GoalService._goal_snapshot(goal), db)
+        goal.status = GoalStatus.pending_approval
+        goal.submitted_at = datetime.now(timezone.utc)
+        goal.withdrawn_at = None
+        goal.last_action_by = current_user.id
+        goal.ai_assessment = GoalService._build_ai_assessment(goal)
+        await GoalService._add_approval_event(
+            goal=goal,
+            action="submitted",
+            actor_id=current_user.id,
+            from_status=GoalStatus(before["status"]),
+            to_status=goal.status,
+            db=db,
+            ai_assessment=goal.ai_assessment,
+        )
+        await GoalService._log_goal_change(goal.id, current_user.id, "submitted_for_approval", before, GoalService._goal_snapshot(goal), db)
         await db.commit()
         await db.refresh(goal)
         return goal
 
     @staticmethod
-    async def approve_goal(goal_id: str, current_user: User, db: AsyncSession) -> Goal:
+    async def approve_goal(goal_id: str, current_user: User, db: AsyncSession, manager_comment: str | None = None) -> Goal:
         goal = await db.get(Goal, goal_id)
         if not goal:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
@@ -285,16 +349,34 @@ class GoalService:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Managers cannot approve their own goals")
         elif current_user.organization_id != owner.organization_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-organization approval is not allowed")
+        if not GoalService._is_waiting_manager_review(goal):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Goal is not awaiting manager review")
 
         before = GoalService._goal_snapshot(goal)
+        previous_status = goal.status
         goal.status = GoalStatus.approved
-        await GoalService._log_goal_change(goal.id, current_user.id, "approved", before, GoalService._goal_snapshot(goal), db)
+        goal.approved_at = datetime.now(timezone.utc)
+        goal.rejected_at = None
+        goal.edit_requested_at = None
+        goal.manager_comment = manager_comment
+        goal.last_action_by = current_user.id
+        await GoalService._add_approval_event(
+            goal=goal,
+            action="approved",
+            actor_id=current_user.id,
+            from_status=previous_status,
+            to_status=goal.status,
+            db=db,
+            comment=manager_comment,
+            ai_assessment=goal.ai_assessment,
+        )
+        await GoalService._log_goal_change(goal.id, current_user.id, "approved", before, GoalService._goal_snapshot(goal), db, note=manager_comment)
         await db.commit()
         await db.refresh(goal)
         return goal
 
     @staticmethod
-    async def reject_goal(goal_id: str, current_user: User, db: AsyncSession) -> Goal:
+    async def reject_goal(goal_id: str, current_user: User, db: AsyncSession, manager_comment: str | None = None) -> Goal:
         goal = await db.get(Goal, goal_id)
         if not goal:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
@@ -311,13 +393,303 @@ class GoalService:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Managers cannot reject their own goals")
         elif current_user.organization_id != owner.organization_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-organization rejection is not allowed")
+        if not GoalService._is_waiting_manager_review(goal):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Goal is not awaiting manager review")
 
         before = GoalService._goal_snapshot(goal)
+        previous_status = goal.status
         goal.status = GoalStatus.rejected
-        await GoalService._log_goal_change(goal.id, current_user.id, "rejected", before, GoalService._goal_snapshot(goal), db)
+        goal.rejected_at = datetime.now(timezone.utc)
+        goal.edit_requested_at = None
+        goal.manager_comment = manager_comment
+        goal.last_action_by = current_user.id
+        await GoalService._add_approval_event(
+            goal=goal,
+            action="rejected",
+            actor_id=current_user.id,
+            from_status=previous_status,
+            to_status=goal.status,
+            db=db,
+            comment=manager_comment,
+            ai_assessment=goal.ai_assessment,
+        )
+        await GoalService._log_goal_change(goal.id, current_user.id, "rejected", before, GoalService._goal_snapshot(goal), db, note=manager_comment)
         await db.commit()
         await db.refresh(goal)
         return goal
+
+    @staticmethod
+    async def self_create_goal(employee: User, payload: GoalCreate, db: AsyncSession) -> Goal:
+        if employee.role != UserRole.employee:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only employees can self-create goals")
+
+        active_cycle_id = await GoalService._active_cycle_id_for_org(employee.organization_id, db)
+        await ensure_cycle_writable(db, active_cycle_id, locked_detail="Cannot create goals in a locked cycle")
+
+        current_weight = await GoalService.get_workload(employee.id, db)
+        projected = round(current_weight + float(payload.weightage), 1)
+        if projected > 100:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Total goal weightage cannot exceed 100% (projected: {projected}%)")
+
+        goal = Goal(
+            cycle_id=active_cycle_id,
+            user_id=employee.id,
+            assigned_to=employee.id,
+            assigned_by=employee.manager_id,
+            title=payload.title,
+            description=payload.description,
+            weightage=payload.weightage,
+            status=GoalStatus.draft,
+            progress=0,
+            framework=payload.framework,
+            source_type="self_created",
+            last_action_by=employee.id,
+        )
+        db.add(goal)
+        await db.flush()
+
+        await GoalService._add_approval_event(
+            goal=goal,
+            action="created",
+            actor_id=employee.id,
+            from_status=None,
+            to_status=goal.status,
+            db=db,
+        )
+        await GoalService._log_goal_change(goal.id, employee.id, "self_created", None, GoalService._goal_snapshot(goal), db)
+        await db.commit()
+        await db.refresh(goal)
+        return goal
+
+    @staticmethod
+    async def submit_self_goal_for_approval(
+        goal_id: str,
+        employee: User,
+        db: AsyncSession,
+        notes: str | None = None,
+    ) -> Goal:
+        goal = await db.get(Goal, goal_id)
+        if not goal:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+        if goal.user_id != employee.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only owner can submit goal")
+        if goal.source_type != "self_created":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only self-created goals can use this workflow")
+        if goal.status not in {GoalStatus.draft, GoalStatus.edit_requested}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Goal is not in a submittable state")
+        if not employee.manager_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No manager assigned for approval")
+
+        await ensure_cycle_writable(db, goal.cycle_id, locked_detail="Cannot submit goal in a locked cycle")
+
+        before = GoalService._goal_snapshot(goal)
+        previous_status = goal.status
+        goal.status = GoalStatus.pending_approval
+        goal.submitted_at = datetime.now(timezone.utc)
+        goal.withdrawn_at = None
+        goal.submission_notes = notes
+        goal.last_action_by = employee.id
+        goal.ai_assessment = GoalService._build_ai_assessment(goal)
+
+        await GoalService._add_approval_event(
+            goal=goal,
+            action="submitted",
+            actor_id=employee.id,
+            from_status=previous_status,
+            to_status=goal.status,
+            db=db,
+            comment=notes,
+            ai_assessment=goal.ai_assessment,
+        )
+        await GoalService._log_goal_change(
+            goal.id,
+            employee.id,
+            "submitted_for_approval",
+            before,
+            GoalService._goal_snapshot(goal),
+            db,
+            note=notes,
+        )
+        await db.commit()
+        await db.refresh(goal)
+        return goal
+
+    @staticmethod
+    async def withdraw_goal_request(
+        goal_id: str,
+        employee: User,
+        db: AsyncSession,
+        reason: str | None = None,
+    ) -> Goal:
+        goal = await db.get(Goal, goal_id)
+        if not goal:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+        if goal.user_id != employee.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only owner can withdraw goal")
+        if not GoalService._is_waiting_manager_review(goal):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only pending goals can be withdrawn")
+
+        await ensure_cycle_writable(db, goal.cycle_id, locked_detail="Cannot withdraw goal in a locked cycle")
+
+        before = GoalService._goal_snapshot(goal)
+        previous_status = goal.status
+        goal.status = GoalStatus.withdrawn
+        goal.withdrawn_at = datetime.now(timezone.utc)
+        goal.last_action_by = employee.id
+
+        await GoalService._add_approval_event(
+            goal=goal,
+            action="withdrawn",
+            actor_id=employee.id,
+            from_status=previous_status,
+            to_status=goal.status,
+            db=db,
+            comment=reason,
+        )
+        await GoalService._log_goal_change(goal.id, employee.id, "withdrawn", before, GoalService._goal_snapshot(goal), db, note=reason)
+        await db.commit()
+        await db.refresh(goal)
+        return goal
+
+    @staticmethod
+    async def list_manager_pending_goals(manager: User, db: AsyncSession) -> list[tuple[Goal, User]]:
+        result = await db.execute(
+            select(Goal, User)
+            .join(User, Goal.user_id == User.id)
+            .where(
+                User.manager_id == manager.id,
+                User.organization_id == manager.organization_id,
+                Goal.source_type == "self_created",
+                Goal.status.in_([GoalStatus.pending_approval, GoalStatus.submitted]),
+            )
+            .order_by(Goal.submitted_at.desc().nullslast(), Goal.created_at.desc())
+        )
+        return list(result.all())
+
+    @staticmethod
+    async def request_goal_edit(
+        goal_id: str,
+        manager: User,
+        db: AsyncSession,
+        comment: str | None = None,
+    ) -> Goal:
+        goal = await db.get(Goal, goal_id)
+        if not goal:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+
+        owner = await db.get(User, goal.user_id)
+        if not owner or owner.manager_id != manager.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Managers can review only direct-report goals")
+        if not GoalService._is_waiting_manager_review(goal):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Goal is not awaiting manager review")
+
+        await ensure_cycle_writable(db, goal.cycle_id, locked_detail="Cannot request edits in a locked cycle")
+
+        before = GoalService._goal_snapshot(goal)
+        previous_status = goal.status
+        goal.status = GoalStatus.edit_requested
+        goal.edit_requested_at = datetime.now(timezone.utc)
+        goal.manager_comment = comment
+        goal.last_action_by = manager.id
+
+        await GoalService._add_approval_event(
+            goal=goal,
+            action="edit_requested",
+            actor_id=manager.id,
+            from_status=previous_status,
+            to_status=goal.status,
+            db=db,
+            comment=comment,
+            ai_assessment=goal.ai_assessment,
+        )
+        await GoalService._log_goal_change(goal.id, manager.id, "edit_requested", before, GoalService._goal_snapshot(goal), db, note=comment)
+        await db.commit()
+        await db.refresh(goal)
+        return goal
+
+    @staticmethod
+    async def manager_edit_and_approve_goal(
+        goal_id: str,
+        manager: User,
+        payload: GoalUpdate,
+        db: AsyncSession,
+        comment: str | None = None,
+    ) -> Goal:
+        goal = await db.get(Goal, goal_id)
+        if not goal:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+
+        owner = await db.get(User, goal.user_id)
+        if not owner or owner.manager_id != manager.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Managers can review only direct-report goals")
+        if not GoalService._is_waiting_manager_review(goal):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Goal is not awaiting manager review")
+
+        await ensure_cycle_writable(db, goal.cycle_id, locked_detail="Cannot edit or approve goal in a locked cycle")
+
+        before = GoalService._goal_snapshot(goal)
+        previous_status = goal.status
+        changes = payload.model_dump(exclude_unset=True)
+        for key, value in changes.items():
+            setattr(goal, key, value)
+        goal.status = GoalStatus.approved
+        goal.approved_at = datetime.now(timezone.utc)
+        goal.manager_comment = comment
+        goal.last_action_by = manager.id
+
+        await GoalService._add_approval_event(
+            goal=goal,
+            action="manager_edit_approved",
+            actor_id=manager.id,
+            from_status=previous_status,
+            to_status=goal.status,
+            db=db,
+            comment=comment,
+            ai_assessment=goal.ai_assessment,
+        )
+        await GoalService._log_goal_change(goal.id, manager.id, "manager_edit_approved", before, GoalService._goal_snapshot(goal), db, note=comment)
+        await db.commit()
+        await db.refresh(goal)
+        return goal
+
+    @staticmethod
+    async def get_goal_approval_history(goal_id: str, current_user: User, db: AsyncSession) -> list[GoalApprovalHistory]:
+        goal = await db.get(Goal, goal_id)
+        if not goal:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+
+        owner = await db.get(User, goal.user_id)
+        if not owner or owner.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        if current_user.role == UserRole.employee and goal.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employees can view only own goal history")
+        if current_user.role == UserRole.manager and owner.manager_id != current_user.id and owner.id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Managers can view only own or direct-report goal history")
+
+        result = await db.execute(
+            select(GoalApprovalHistory)
+            .where(GoalApprovalHistory.goal_id == goal.id)
+            .order_by(GoalApprovalHistory.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_self_goal_summary(employee: User, db: AsyncSession) -> dict:
+        result = await db.execute(
+            select(Goal)
+            .where(
+                Goal.user_id == employee.id,
+                Goal.source_type == "self_created",
+                Goal.status != GoalStatus.rejected,
+            )
+        )
+        goals = list(result.scalars().all())
+        return {
+            "total_weightage": round(sum(float(goal.weightage or 0) for goal in goals), 1),
+            "pending_approval_count": sum(1 for goal in goals if GoalService._is_waiting_manager_review(goal)),
+            "edit_requested_count": sum(1 for goal in goals if goal.status == GoalStatus.edit_requested),
+            "approved_count": sum(1 for goal in goals if goal.status == GoalStatus.approved),
+        }
 
     @staticmethod
     async def assign_goals(manager: User, payload: GoalAssignRequest, db: AsyncSession) -> list[Goal]:
@@ -413,11 +785,20 @@ class GoalService:
             else:
                 raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=message) from exc
 
-        clusters: dict[str, list[dict]] = {"frontend": [], "backend": [], "others": []}
-        seen_titles: dict[str, set[str]] = {"frontend": set(), "backend": set(), "others": set()}
+        clusters: dict[str, list[dict]] = {}
+        role_labels: dict[str, str] = {}
+        seen_titles: dict[str, set[str]] = {}
 
         for employee in generated.get("employees", []):
-            role_key = GoalService._role_key_from_text(employee.get("role"))
+            role_text = str(employee.get("role", "")).strip() or "General"
+            role_key = GoalService._role_key_from_text(role_text)
+            if role_key not in role_labels:
+                role_labels[role_key] = role_text
+            if role_key not in clusters:
+                clusters[role_key] = []
+            if role_key not in seen_titles:
+                seen_titles[role_key] = set()
+
             for goal in employee.get("goals", []):
                 title = str(goal.get("title", "")).strip()
                 description = str(goal.get("description", "")).strip()
@@ -440,13 +821,17 @@ class GoalService:
                     }
                 )
 
+        cluster_payload = [
+            {
+                "role": role_labels.get(role_key, role_key.replace("-", " ").title()),
+                "goals": goals,
+            }
+            for role_key, goals in sorted(clusters.items(), key=lambda item: item[0])
+        ]
+
         return {
             "manager_id": manager.id,
-            "clusters": [
-                {"role": "frontend", "goals": clusters["frontend"]},
-                {"role": "backend", "goals": clusters["backend"]},
-                {"role": "others", "goals": clusters["others"]},
-            ],
+            "clusters": cluster_payload,
         }
 
     @staticmethod
@@ -821,7 +1206,7 @@ class GoalService:
     async def get_goal_drift(current_user: User, mode: UserRole, db: AsyncSession) -> list[dict]:
         horizon = datetime.now(timezone.utc) - timedelta(days=14)
         stmt = select(Goal).where(
-            Goal.status.in_([GoalStatus.submitted, GoalStatus.approved]),
+            Goal.status.in_([GoalStatus.submitted, GoalStatus.pending_approval, GoalStatus.approved]),
             Goal.created_at <= horizon,
         )
 

@@ -35,6 +35,7 @@ export default function ManagerApprovalsPage() {
   const [transcriptInsightsByCheckin, setTranscriptInsightsByCheckin] = useState<Record<string, CheckinTranscriptIngestResult>>({});
   const [recommendationByCheckin, setRecommendationByCheckin] = useState<Record<string, CheckinRatingRecommendation>>({});
   const [coachingByCheckin, setCoachingByCheckin] = useState<Record<string, AIFeedbackCoachingResult>>({});
+  const [submittingByCheckin, setSubmittingByCheckin] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     const [pendingProposals, allMeetings] = await Promise.all([
@@ -68,6 +69,7 @@ export default function ManagerApprovalsPage() {
     return meetings.filter((meeting) => {
       if (!meeting.checkin_id) return false;
       if (meeting.status === "cancelled") return false;
+      if (meeting.status === "completed") return false;
       const endTime = new Date(meeting.end_time).getTime();
       return !Number.isNaN(endTime) && endTime <= now;
     });
@@ -97,12 +99,17 @@ export default function ManagerApprovalsPage() {
   };
 
   const submitRating = async (checkinId: string) => {
+    if (submittingByCheckin[checkinId]) {
+      return;
+    }
+
     const draft = ratingsByCheckin[checkinId] ?? { rating: 4, feedback: "" };
     if (draft.rating < 1 || draft.rating > 5) {
       toast.error("Rating must be between 1 and 5");
       return;
     }
 
+    setSubmittingByCheckin((prev) => ({ ...prev, [checkinId]: true }));
     try {
       await checkinsService.rate(checkinId, {
         rating: draft.rating,
@@ -110,9 +117,31 @@ export default function ManagerApprovalsPage() {
       });
       toast.success("Check-in rated successfully");
       setRatingsByCheckin((prev) => ({ ...prev, [checkinId]: { rating: 4, feedback: "" } }));
+      setMeetings((prev) =>
+        prev.map((meeting) =>
+          meeting.checkin_id === checkinId ? { ...meeting, status: "completed" } : meeting,
+        ),
+      );
       await load();
-    } catch {
-      toast.error("Failed to submit rating");
+    } catch (error: unknown) {
+      const detail =
+        error && typeof error === "object" && "response" in error
+          ? (error as { response?: { data?: { detail?: string; error?: string } } }).response?.data?.detail ||
+            (error as { response?: { data?: { detail?: string; error?: string } } }).response?.data?.error
+          : undefined;
+
+      if ((detail || "").toLowerCase().includes("already submitted") || (detail || "").toLowerCase().includes("already")) {
+        setMeetings((prev) =>
+          prev.map((meeting) =>
+            meeting.checkin_id === checkinId ? { ...meeting, status: "completed" } : meeting,
+          ),
+        );
+        toast.success("Post-meeting review already submitted. Removed from queue.");
+      } else {
+        toast.error(detail || "Failed to submit rating");
+      }
+    } finally {
+      setSubmittingByCheckin((prev) => ({ ...prev, [checkinId]: false }));
     }
   };
 
@@ -278,7 +307,9 @@ export default function ManagerApprovalsPage() {
                   <Button size="sm" variant="outline" onClick={() => coachFeedback(checkinId)}>
                     Coach Feedback Tone
                   </Button>
-                  <Button size="sm" onClick={() => submitRating(checkinId)}>Submit Rating</Button>
+                  <Button size="sm" onClick={() => submitRating(checkinId)} disabled={Boolean(submittingByCheckin[checkinId])}>
+                    {submittingByCheckin[checkinId] ? "Submitting..." : "Submit Rating"}
+                  </Button>
                 </div>
 
                 {recommendationByCheckin[checkinId] ? (

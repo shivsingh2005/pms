@@ -1,5 +1,6 @@
 import { api } from "@/services/api";
 import type {
+  GoalApprovalHistory,
   GoalChangeLog,
   GoalCascadeChildPayload,
   GoalCascadeResult,
@@ -9,6 +10,8 @@ import type {
   GoalDriftInsight,
   GoalLineage,
   GoalAssignmentSingleResult,
+  ManagerPendingGoal,
+  SelfGoalSummary,
 } from "@/types";
 
 interface CreateGoalPayload {
@@ -39,7 +42,7 @@ interface GoalAssignPayload {
 
 interface GoalAssignSinglePayload {
   employee_id: string;
-  role: "frontend" | "backend" | "others";
+  role: string;
   title: string;
   description?: string | null;
   kpi?: string | null;
@@ -60,8 +63,20 @@ export const goalsService = {
     const { data } = await api.post<Goal>("/goals", payload);
     return data;
   },
+  async selfCreateGoal(payload: Omit<CreateGoalPayload, "progress">) {
+    const { data } = await api.post<Goal>("/goals/self-create", payload);
+    return data;
+  },
   async updateGoal(id: string, payload: Partial<CreateGoalPayload>) {
     const { data } = await api.patch<Goal>(`/goals/${id}`, payload);
+    return data;
+  },
+  async requestApproval(id: string, notes?: string) {
+    const { data } = await api.post<Goal>(`/goals/${id}/request-approval`, { notes: notes || null });
+    return data;
+  },
+  async withdrawGoal(id: string, reason?: string) {
+    const { data } = await api.post<Goal>(`/goals/${id}/withdraw`, { reason: reason || null });
     return data;
   },
   async submitGoal(id: string) {
@@ -76,6 +91,44 @@ export const goalsService = {
     const { data } = await api.post<Goal>(`/goals/${id}/reject`);
     return data;
   },
+  async managerApproveGoal(id: string, comment?: string) {
+    const { data } = await api.post<Goal>(`/goals/${id}/manager/approve`, { comment: comment || null });
+    return data;
+  },
+  async managerRequestEdit(id: string, comment?: string) {
+    const { data } = await api.post<Goal>(`/goals/${id}/manager/request-edit`, { comment: comment || null });
+    return data;
+  },
+  async managerRejectGoal(id: string, comment?: string) {
+    const { data } = await api.post<Goal>(`/goals/${id}/manager/reject`, { comment: comment || null });
+    return data;
+  },
+  async managerEditAndApproveGoal(
+    id: string,
+    payload: {
+      title?: string;
+      description?: string | null;
+      weightage?: number;
+      framework?: "OKR" | "MBO" | "Hybrid";
+      progress?: number;
+      comment?: string;
+    },
+  ) {
+    const { data } = await api.post<Goal>(`/goals/${id}/manager/edit-and-approve`, payload);
+    return data;
+  },
+  async getManagerPendingGoals() {
+    const { data } = await api.get<ManagerPendingGoal[]>("/goals/manager/pending");
+    return data;
+  },
+  async getSelfGoalSummary() {
+    const { data } = await api.get<SelfGoalSummary>("/goals/self/summary");
+    return data;
+  },
+  async getGoalApprovalHistory(goalId: string) {
+    const { data } = await api.get<GoalApprovalHistory[]>(`/goals/${goalId}/approval-history`);
+    return data;
+  },
   async assignGoals(payload: GoalAssignPayload) {
     const { data } = await api.post<Goal[]>("/goals/assign", payload);
     return data;
@@ -87,8 +140,9 @@ export const goalsService = {
     );
     return data;
   },
-  async getAssignmentCandidates(role: "frontend" | "backend" | "others") {
-    const { data } = await api.get<GoalAssignmentCandidate[]>(`/goals/assignment/candidates/${role}`);
+  async getAssignmentCandidates(role: string) {
+    const encodedRole = encodeURIComponent(role);
+    const { data } = await api.get<GoalAssignmentCandidate[]>(`/goals/assignment/candidates/${encodedRole}`);
     return data;
   },
   async assignSingleGoal(payload: GoalAssignSinglePayload) {

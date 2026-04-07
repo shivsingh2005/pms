@@ -15,6 +15,8 @@ interface GoalsState {
   }) => Promise<void>;
   updateGoal: (id: string, payload: Partial<Goal>) => Promise<void>;
   submitGoal: (id: string) => Promise<void>;
+  requestApproval: (id: string, notes?: string) => Promise<void>;
+  withdrawGoal: (id: string, reason?: string) => Promise<void>;
 }
 
 export const useGoalsStore = create<GoalsState>((set, get) => ({
@@ -35,6 +37,14 @@ export const useGoalsStore = create<GoalsState>((set, get) => ({
   },
   submitGoal: async (id) => {
     await goalsService.submitGoal(id);
+    await get().fetchGoals();
+  },
+  requestApproval: async (id, notes) => {
+    await goalsService.requestApproval(id, notes);
+    await get().fetchGoals();
+  },
+  withdrawGoal: async (id, reason) => {
+    await goalsService.withdrawGoal(id, reason);
     await get().fetchGoals();
   },
 }));

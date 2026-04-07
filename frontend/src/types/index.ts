@@ -34,11 +34,48 @@ export interface Goal {
   title: string;
   description?: string | null;
   weightage: number;
-  status: "draft" | "submitted" | "approved" | "rejected";
+  status: "draft" | "submitted" | "pending_approval" | "edit_requested" | "withdrawn" | "approved" | "rejected";
   progress: number;
   framework: "OKR" | "MBO" | "Hybrid";
   is_ai_generated?: boolean;
+  source_type?: "self_created" | "manager_assigned" | string;
+  submission_notes?: string | null;
+  manager_comment?: string | null;
+  ai_assessment?: Record<string, unknown> | null;
+  submitted_at?: string | null;
+  approved_at?: string | null;
+  rejected_at?: string | null;
+  edit_requested_at?: string | null;
+  withdrawn_at?: string | null;
+  last_action_by?: string | null;
   created_at: string;
+}
+
+export interface GoalApprovalHistory {
+  id: string;
+  goal_id: string;
+  actor_id?: string | null;
+  action: string;
+  from_status?: string | null;
+  to_status?: string | null;
+  comment?: string | null;
+  ai_assessment?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface SelfGoalSummary {
+  total_weightage: number;
+  pending_approval_count: number;
+  edit_requested_count: number;
+  approved_count: number;
+}
+
+export interface ManagerPendingGoal {
+  goal: Goal;
+  employee_name: string;
+  employee_email: string;
+  employee_role: string;
+  employee_department?: string | null;
 }
 
 export interface Checkin {
@@ -214,7 +251,7 @@ export interface RoleGoalRecommendation {
 }
 
 export interface RoleGoalCluster {
-  role: "frontend" | "backend" | "others";
+  role: string;
   goals: RoleGoalRecommendation[];
 }
 
@@ -227,7 +264,7 @@ export interface GoalAssignmentCandidate {
   employee_id: string;
   employee_name: string;
   role: string;
-  role_key: "frontend" | "backend" | "others";
+  role_key: string;
   goal_count: number;
   total_weightage: number;
   active_checkins: number;

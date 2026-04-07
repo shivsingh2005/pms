@@ -11,6 +11,9 @@ class UserRole(str, Enum):
 class GoalStatus(str, Enum):
     draft = "draft"
     submitted = "submitted"
+    pending_approval = "pending_approval"
+    edit_requested = "edit_requested"
+    withdrawn = "withdrawn"
     approved = "approved"
     rejected = "rejected"
 

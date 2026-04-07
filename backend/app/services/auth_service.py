@@ -19,6 +19,24 @@ logger = logging.getLogger(__name__)
 
 class AuthService:
     @staticmethod
+    def _infer_role_from_email(email: str) -> UserRole:
+        local_part = email.split("@")[0].strip().lower()
+        if any(token in local_part for token in ("manager", "mgr", "lead")):
+            return UserRole.manager
+        if "hr" in local_part or "people" in local_part:
+            return UserRole.hr
+        if any(token in local_part for token in ("executive", "leadership", "admin", "director")):
+            return UserRole.leadership
+        return UserRole.employee
+
+    @staticmethod
+    def _resolved_roles(primary_role: UserRole) -> list[str]:
+        roles: list[str] = [primary_role.value]
+        if primary_role == UserRole.manager and UserRole.employee.value not in roles:
+            roles.append(UserRole.employee.value)
+        return roles
+
+    @staticmethod
     async def _build_token_response(user: User) -> TokenResponse:
         token = create_access_token(
             {
@@ -65,6 +83,8 @@ class AuthService:
     async def email_login(payload: EmailLoginRequest, db: AsyncSession) -> TokenResponse:
         raw_email = str(payload.email)
         email = raw_email.strip().lower()
+        is_demo_email = email.endswith("@structured.mock") or email.endswith("@acmepms.com")
+        should_infer_role = settings.APP_ENV.strip().lower() == "development" or is_demo_email
 
         logger.info("Auth login attempt received", extra={"email_raw": raw_email, "email_normalized": email})
 
@@ -89,8 +109,7 @@ class AuthService:
             )
 
         if not user:
-            is_development = settings.APP_ENV.strip().lower() == "development"
-            if not is_development:
+            if not should_infer_role:
                 raise ValueError("User not registered")
 
             domain = email.split("@")[-1]
@@ -107,13 +126,14 @@ class AuthService:
             if not inferred_name:
                 inferred_name = "Employee"
 
+            inferred_role = AuthService._infer_role_from_email(email)
             user = User(
                 google_id=f"email-{uuid4()}",
                 email=email,
                 name=inferred_name,
                 profile_picture=None,
-                role=UserRole.employee,
-                roles=[UserRole.employee.value],
+                role=inferred_role,
+                roles=AuthService._resolved_roles(inferred_role),
                 organization_id=org.id,
                 domain=domain,
                 first_login=True,
@@ -124,6 +144,15 @@ class AuthService:
             db.add(user)
             await db.commit()
             await db.refresh(user)
+        else:
+            # Keep seeded/demo data usable in development where legacy seed sets may have mismatched roles.
+            if should_infer_role:
+                inferred_role = AuthService._infer_role_from_email(email)
+                if user.role != inferred_role:
+                    user.role = inferred_role
+                expected_roles = AuthService._resolved_roles(user.role)
+                if sorted(user.roles or []) != sorted(expected_roles):
+                    user.roles = expected_roles
 
         user.last_active = datetime.now(timezone.utc)
         await db.commit()

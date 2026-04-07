@@ -7,12 +7,24 @@ import { toast } from "sonner";
 
 function statusClass(status: Goal["status"]) {
   if (status === "approved") return "border-success/25 bg-success/15 text-success";
-  if (status === "submitted") return "border-warning/25 bg-warning/15 text-warning";
+  if (status === "submitted" || status === "pending_approval") return "border-warning/25 bg-warning/15 text-warning";
+  if (status === "edit_requested") return "border-info/25 bg-info/15 text-info";
+  if (status === "withdrawn") return "border-border/70 bg-muted text-muted-foreground";
   if (status === "rejected") return "border-error/25 bg-error/15 text-error";
   return "border-border/70 bg-muted text-muted-foreground";
 }
 
-export function GoalCard({ goal, onSubmit }: { goal: Goal; onSubmit: (id: string) => void }) {
+export function GoalCard({
+  goal,
+  onSubmit,
+  onRequestApproval,
+  onWithdraw,
+}: {
+  goal: Goal;
+  onSubmit: (id: string) => void;
+  onRequestApproval?: (id: string) => void;
+  onWithdraw?: (id: string) => void;
+}) {
   const copyGoalId = async () => {
     try {
       await navigator.clipboard.writeText(goal.id);
@@ -45,11 +57,20 @@ export function GoalCard({ goal, onSubmit }: { goal: Goal; onSubmit: (id: string
 
       <ProgressWidget progress={goal.progress} framework={goal.framework} weightage={goal.weightage} />
 
-      {goal.status === "draft" && (
-        <Button variant="outline" size="sm" onClick={() => onSubmit(goal.id)}>
-          Submit goal
-        </Button>
-      )}
+      {goal.manager_comment ? <p className="text-xs text-muted-foreground">Manager note: {goal.manager_comment}</p> : null}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {(goal.status === "draft" || goal.status === "edit_requested") && (
+          <Button variant="outline" size="sm" onClick={() => (onRequestApproval ? onRequestApproval(goal.id) : onSubmit(goal.id))}>
+            Request approval
+          </Button>
+        )}
+        {(goal.status === "pending_approval" || goal.status === "submitted") && onWithdraw ? (
+          <Button variant="ghost" size="sm" onClick={() => onWithdraw(goal.id)}>
+            Withdraw
+          </Button>
+        ) : null}
+      </div>
     </Card>
   );
 }

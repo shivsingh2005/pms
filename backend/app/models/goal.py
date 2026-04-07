@@ -30,8 +30,19 @@ class Goal(Base, UUIDMixin, TimestampMixin):
     leadership_target_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     leadership_target_unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
     cascade_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default="manager_assigned", server_default="manager_assigned")
+    submission_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    manager_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_assessment: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    edit_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_action_by: Mapped[str | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
 
     contributions = relationship("GoalContribution", back_populates="goal", cascade="all, delete-orphan")
+    approval_history = relationship("GoalApprovalHistory", back_populates="goal", cascade="all, delete-orphan")
 
 
 class GoalContribution(Base, UUIDMixin):
@@ -74,3 +85,18 @@ class GoalChangeLog(Base, UUIDMixin):
     after_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class GoalApprovalHistory(Base, UUIDMixin):
+    __tablename__ = "goal_approval_history"
+
+    goal_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("goals.id", ondelete="CASCADE"), nullable=False, index=True)
+    actor_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    from_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    to_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_assessment: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    goal = relationship("Goal", back_populates="approval_history")

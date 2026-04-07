@@ -23,7 +23,7 @@ def get(path, headers=None):
         return json.loads(r.read().decode('utf-8'))
 
 for role in roles:
-    login = post('/auth/role-login', {'role': role, 'email': f'{role}@acmepms.com', 'name': 'Demo User'})
+    login = post('/auth/login', {'email': f'{role}@acmepms.com', 'name': 'Demo User'})
     token = login['data']['access_token']
     headers = {'Authorization': f'Bearer {token}'}
 

@@ -26,10 +26,8 @@ import type {
   RoleGoalRecommendation,
 } from "@/types";
 
-type RoleKey = "frontend" | "backend" | "others";
-
 interface GoalEditorState {
-  role: RoleKey;
+  role: string;
   title: string;
   description: string;
   kpi: string;
@@ -55,10 +53,62 @@ function workloadBadgeClass(status: "low" | "medium" | "high"): string {
   return "bg-red-500/15 text-red-600";
 }
 
-function roleLabel(role: RoleKey): string {
-  if (role === "frontend") return "Frontend";
-  if (role === "backend") return "Backend";
-  return "Others";
+function roleLabel(role: string): string {
+  const trimmed = role.trim();
+  if (!trimmed) return "General";
+  if (!/[\s_-]/.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed
+    .replace(/[_-]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function buildFallbackClusters(teamMembers: ManagerTeamMember[]): RoleGoalCluster[] {
+  const roleToMembers = new Map<string, ManagerTeamMember[]>();
+
+  for (const member of teamMembers) {
+    const role = (member.role || "General").trim() || "General";
+    const bucket = roleToMembers.get(role) || [];
+    bucket.push(member);
+    roleToMembers.set(role, bucket);
+  }
+
+  const clusters: RoleGoalCluster[] = [];
+  for (const [role, members] of roleToMembers.entries()) {
+    const teamSize = members.length;
+    clusters.push({
+      role,
+      goals: [
+        {
+          title: `Improve ${roleLabel(role)} delivery reliability`,
+          description: `Increase predictable execution for ${roleLabel(role)} outcomes with clear sprint commitments and risk tracking.`,
+          difficulty: "medium",
+          suggested_weight: 35,
+          kpi: `Maintain at least 90% commitment reliability across ${teamSize} team member(s)`,
+        },
+        {
+          title: `Raise quality standards for ${roleLabel(role)}`,
+          description: `Reduce defects and rework by improving review quality and pre-release validation discipline.`,
+          difficulty: "medium",
+          suggested_weight: 30,
+          kpi: `Reduce escaped defects by 20% this cycle`,
+        },
+        {
+          title: `Strengthen cross-functional collaboration`,
+          description: `Resolve handoff bottlenecks with adjacent teams and improve end-to-end ownership.`,
+          difficulty: "hard",
+          suggested_weight: 35,
+          kpi: `Close at least 2 cross-team dependencies with measurable impact`,
+        },
+      ],
+    });
+  }
+
+  return clusters;
 }
 
 export default function ManagerGoalsAllotmentPage() {
@@ -70,12 +120,14 @@ export default function ManagerGoalsAllotmentPage() {
   const [objective, setObjective] = useState("");
   const [generating, setGenerating] = useState(false);
   const [clusters, setClusters] = useState<RoleGoalCluster[]>([]);
-  const [activeRole, setActiveRole] = useState<RoleKey>("frontend");
+  const [activeRole, setActiveRole] = useState("");
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [editor, setEditor] = useState<GoalEditorState | null>(null);
   const [candidates, setCandidates] = useState<GoalAssignmentCandidate[]>([]);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [roleCandidates, setRoleCandidates] = useState<GoalAssignmentCandidate[]>([]);
+  const [loadingRoleCandidates, setLoadingRoleCandidates] = useState(false);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
   const [allowOverload, setAllowOverload] = useState(false);
   const [assigning, setAssigning] = useState(false);
@@ -139,24 +191,55 @@ export default function ManagerGoalsAllotmentPage() {
     void initializePhase2();
   }, [activeMode, initializePhase2, router, setActiveMode, user]);
 
+  const roleOrder = useMemo(() => {
+    return clusters
+      .map((cluster) => cluster.role.trim())
+      .filter((role, index, arr) => role.length > 0 && arr.indexOf(role) === index);
+  }, [clusters]);
+
   const clusterMap = useMemo(() => {
-    const map: Record<RoleKey, RoleGoalRecommendation[]> = {
-      frontend: [],
-      backend: [],
-      others: [],
-    };
-
+    const map: Record<string, RoleGoalRecommendation[]> = {};
     for (const cluster of clusters) {
-      const key = (cluster.role || "others") as RoleKey;
-      if (key in map) {
-        map[key] = cluster.goals || [];
-      }
+      const key = cluster.role.trim();
+      if (!key) continue;
+      map[key] = cluster.goals || [];
     }
-
     return map;
   }, [clusters]);
 
-  const visibleGoals = clusterMap[activeRole] || [];
+  useEffect(() => {
+    if (roleOrder.length === 0) {
+      setActiveRole("");
+      return;
+    }
+
+    if (!activeRole || !roleOrder.includes(activeRole)) {
+      setActiveRole(roleOrder[0]);
+    }
+  }, [activeRole, roleOrder]);
+
+  useEffect(() => {
+    if (!activeRole) {
+      setRoleCandidates([]);
+      return;
+    }
+
+    const loadRoleCandidates = async () => {
+      setLoadingRoleCandidates(true);
+      try {
+        const rows = await goalsService.getAssignmentCandidates(activeRole);
+        setRoleCandidates(rows);
+      } catch {
+        setRoleCandidates([]);
+      } finally {
+        setLoadingRoleCandidates(false);
+      }
+    };
+
+    void loadRoleCandidates();
+  }, [activeRole]);
+
+  const visibleGoals = activeRole ? clusterMap[activeRole] || [] : [];
 
   const generateRoleClusters = async () => {
     setGenerating(true);
@@ -164,20 +247,40 @@ export default function ManagerGoalsAllotmentPage() {
       const payload = await goalsService.getAssignmentRecommendations({
         organization_objectives: objective.trim() || undefined,
       });
-      setClusters(payload.clusters || []);
-      toast.success("Role-based AI goal clusters generated");
+      const apiClusters = payload.clusters || [];
+      const usableClusters = apiClusters.some((cluster) => (cluster.goals || []).length > 0)
+        ? apiClusters
+        : buildFallbackClusters(teamMembers);
+
+      setClusters(usableClusters);
+      const firstRole = usableClusters.find((cluster) => cluster.role.trim())?.role || "";
+      setActiveRole(firstRole);
+      if (usableClusters === apiClusters) {
+        toast.success("Role-based AI goal clusters generated");
+      } else {
+        toast.warning("AI returned no role goals. Generated fallback role clusters from team structure.");
+      }
     } catch (error: unknown) {
+      const fallbackClusters = buildFallbackClusters(teamMembers);
+      if (fallbackClusters.length > 0) {
+        setClusters(fallbackClusters);
+        setActiveRole(fallbackClusters[0].role);
+        toast.warning("AI generation failed. Showing fallback role clusters from your team.");
+      }
+
       const message =
         error && typeof error === "object" && "response" in error
           ? (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
           : undefined;
-      toast.error(message || "Failed to generate role-based goal clusters");
+      if (fallbackClusters.length === 0) {
+        toast.error(message || "Failed to generate role-based goal clusters");
+      }
     } finally {
       setGenerating(false);
     }
   };
 
-  const openAssignModal = async (role: RoleKey, goal: RoleGoalRecommendation) => {
+  const openAssignModal = async (role: string, goal: RoleGoalRecommendation) => {
     setEditor({
       role,
       title: goal.title,
@@ -243,6 +346,7 @@ export default function ManagerGoalsAllotmentPage() {
 
       const refreshed = await goalsService.getAssignmentCandidates(editor.role);
       setCandidates(refreshed);
+      setRoleCandidates(refreshed);
       setAssignOpen(false);
       setEditor(null);
       setSelectedEmployeeId("");
@@ -347,7 +451,7 @@ export default function ManagerGoalsAllotmentPage() {
       <Card className="rounded-xl border bg-card p-5 space-y-4">
         <CardTitle>Goal Clusters</CardTitle>
         <div className="flex flex-wrap gap-2">
-          {(["frontend", "backend", "others"] as RoleKey[]).map((role) => (
+          {roleOrder.map((role) => (
             <Button
               key={role}
               variant={activeRole === role ? "default" : "outline"}
@@ -357,6 +461,10 @@ export default function ManagerGoalsAllotmentPage() {
             </Button>
           ))}
         </div>
+
+        {roleOrder.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Generate clusters to view AI-identified role groups.</p>
+        ) : null}
 
         {visibleGoals.length === 0 ? (
           <p className="text-sm text-muted-foreground">No goals available for {roleLabel(activeRole)}. Generate clusters to continue.</p>
@@ -376,6 +484,37 @@ export default function ManagerGoalsAllotmentPage() {
             ))}
           </div>
         )}
+
+        <div className="rounded-lg border border-border/70 p-4 space-y-3">
+          <p className="text-sm font-medium text-foreground">Employees in {roleLabel(activeRole)} and current workload</p>
+          {loadingRoleCandidates ? (
+            <p className="text-sm text-muted-foreground">Loading employees for selected role...</p>
+          ) : roleCandidates.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No employees found for this role.</p>
+          ) : (
+            <div className="space-y-2">
+              {roleCandidates.map((candidate) => (
+                <div key={`role-${candidate.employee_id}`} className="rounded-lg border border-border/70 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-foreground">{candidate.employee_name}</p>
+                      <p className="text-xs text-muted-foreground">{candidate.role}</p>
+                    </div>
+                    <span className={`rounded-full px-2 py-0.5 text-xs ${workloadBadgeClass(candidate.workload_status)}`}>
+                      {candidate.workload_percent}%
+                    </span>
+                  </div>
+                  <div className="mt-2 h-2 w-full rounded bg-muted/60">
+                    <div
+                      className={`h-2 rounded ${workloadColor(candidate.workload_percent)}`}
+                      style={{ width: `${Math.min(candidate.workload_percent, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </Card>
 
       <Card className="rounded-xl border bg-card p-5 space-y-4">

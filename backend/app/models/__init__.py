@@ -1,6 +1,6 @@
 from app.models.organization import Organization
 from app.models.user import User
-from app.models.goal import Goal, GoalChangeLog, GoalContribution, GoalLineage
+from app.models.goal import Goal, GoalApprovalHistory, GoalChangeLog, GoalContribution, GoalLineage
 from app.models.goal_assignment import GoalAssignment
 from app.models.goal_cluster import GoalCluster
 from app.models.checkin import Checkin
@@ -33,6 +33,7 @@ __all__ = [
     "GoalContribution",
     "GoalLineage",
     "GoalChangeLog",
+    "GoalApprovalHistory",
     "Checkin",
     "Rating",
     "PerformanceReview",

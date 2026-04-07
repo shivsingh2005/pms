@@ -362,6 +362,19 @@ class CheckinService:
         if meeting.end_time.astimezone(timezone.utc) > now_utc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Rating is enabled only after meeting end time")
 
+        existing_rating_result = await db.execute(
+            select(CheckinRating)
+            .where(
+                CheckinRating.checkin_id == checkin.id,
+                CheckinRating.manager_id == current_user.id,
+            )
+            .order_by(CheckinRating.created_at.desc())
+            .limit(1)
+        )
+        existing_rating = existing_rating_result.scalar_one_or_none()
+        if existing_rating is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Post-meeting review already submitted for this check-in")
+
         rating = CheckinRating(
             cycle_id=checkin.cycle_id,
             checkin_id=checkin.id,

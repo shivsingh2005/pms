@@ -33,6 +33,16 @@ class GoalOut(BaseModel):
     progress: float
     framework: GoalFramework
     is_ai_generated: bool = False
+    source_type: str = "manager_assigned"
+    submission_notes: str | None = None
+    manager_comment: str | None = None
+    ai_assessment: dict | None = None
+    submitted_at: datetime | None = None
+    approved_at: datetime | None = None
+    rejected_at: datetime | None = None
+    edit_requested_at: datetime | None = None
+    withdrawn_at: datetime | None = None
+    last_action_by: UUID | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -176,3 +186,60 @@ class GoalDriftOut(BaseModel):
     progress: float
     drift_score: float
     reason: str
+
+
+class SelfCreateGoalRequest(BaseModel):
+    title: str
+    description: str | None = None
+    weightage: float = Field(ge=0, le=100)
+    framework: GoalFramework
+
+
+class GoalSubmitForApprovalRequest(BaseModel):
+    notes: str | None = None
+
+
+class GoalWithdrawRequest(BaseModel):
+    reason: str | None = None
+
+
+class ManagerGoalReviewRequest(BaseModel):
+    comment: str | None = None
+
+
+class ManagerGoalEditApproveRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    weightage: float | None = Field(default=None, ge=0, le=100)
+    framework: GoalFramework | None = None
+    progress: float | None = Field(default=None, ge=0, le=100)
+    comment: str | None = None
+
+
+class GoalApprovalHistoryOut(BaseModel):
+    id: UUID
+    goal_id: UUID
+    actor_id: UUID | None = None
+    action: str
+    from_status: str | None = None
+    to_status: str | None = None
+    comment: str | None = None
+    ai_assessment: dict | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ManagerPendingGoalOut(BaseModel):
+    goal: GoalOut
+    employee_name: str
+    employee_email: str
+    employee_role: str
+    employee_department: str | None = None
+
+
+class SelfGoalSummaryOut(BaseModel):
+    total_weightage: float
+    pending_approval_count: int
+    edit_requested_count: int
+    approved_count: int

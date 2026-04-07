@@ -10,46 +10,75 @@ export function useAuthBootstrap() {
   const setAuthLoading = useSessionStore((state) => state.setAuthLoading);
 
   useEffect(() => {
-    setAuthLoading(true);
+    let cancelled = false;
 
-    const token = authCookies.getToken();
-    if (!token) {
-      const storedUser = localStorage.getItem("user");
-      if (storedUser) {
-        try {
-          const parsed = JSON.parse(storedUser);
-          setUser(parsed);
-          localStorage.setItem(
-            "session",
-            JSON.stringify({ userId: parsed.id, email: parsed.email, role: parsed.role }),
-          );
-        } catch {
-          setUser(null);
-          localStorage.removeItem("user");
-          localStorage.removeItem("session");
+    const initAuth = async () => {
+      try {
+        setAuthLoading(true);
+
+        const token = authCookies.getToken();
+        if (!token) {
+          const storedUser = localStorage.getItem("user");
+          if (storedUser) {
+            try {
+              const parsed = JSON.parse(storedUser);
+              if (!cancelled) {
+                setUser(parsed);
+                localStorage.setItem(
+                  "session",
+                  JSON.stringify({ userId: parsed.id, email: parsed.email, role: parsed.role }),
+                );
+              }
+            } catch {
+              if (!cancelled) {
+                setUser(null);
+                localStorage.removeItem("user");
+                localStorage.removeItem("session");
+              }
+            }
+          } else {
+            if (!cancelled) {
+              setUser(null);
+            }
+          }
+          if (!cancelled) {
+            setAuthLoading(false);
+          }
+          return;
         }
-      } else {
-        setUser(null);
-      }
-      setAuthLoading(false);
-      return;
-    }
 
-    authService
-      .me()
-      .then((user) => {
-        setUser(user);
-        localStorage.setItem("user", JSON.stringify(user));
-        localStorage.setItem("session", JSON.stringify({ userId: user.id, email: user.email, role: user.role }));
-      })
-      .catch(() => {
-        authCookies.clearToken();
-        setUser(null);
-        localStorage.removeItem("user");
-        localStorage.removeItem("session");
-      })
-      .finally(() => {
-        setAuthLoading(false);
-      });
+        try {
+          const user = await authService.me();
+          if (!cancelled) {
+            setUser(user);
+            localStorage.setItem("user", JSON.stringify(user));
+            localStorage.setItem("session", JSON.stringify({ userId: user.id, email: user.email, role: user.role }));
+          }
+        } catch {
+          if (!cancelled) {
+            authCookies.clearToken();
+            setUser(null);
+            localStorage.removeItem("user");
+            localStorage.removeItem("session");
+          }
+        } finally {
+          if (!cancelled) {
+            setAuthLoading(false);
+          }
+        }
+      } catch (error) {
+        console.error("Auth bootstrap error:", error);
+        if (!cancelled) {
+          setAuthLoading(false);
+          setUser(null);
+        }
+      }
+    };
+
+    initAuth();
+
+    return () => {
+      cancelled = true;
+    };
   }, [setAuthLoading, setUser]);
 }

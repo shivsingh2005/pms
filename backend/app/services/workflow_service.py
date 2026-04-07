@@ -82,7 +82,7 @@ class WorkflowService:
                 action_label="Submit Goals",
             )
 
-        waiting_approval = sum(1 for goal in goals if goal.status == GoalStatus.submitted)
+        waiting_approval = sum(1 for goal in goals if goal.status in [GoalStatus.submitted, GoalStatus.pending_approval])
         if waiting_approval > 0:
             return NextActionPayload(
                 title="Manager review in progress",
@@ -142,7 +142,7 @@ class WorkflowService:
             .where(
                 User.manager_id == user.id,
                 Goal.cycle_id == cycle.id,
-                Goal.status == GoalStatus.submitted,
+                Goal.status.in_([GoalStatus.submitted, GoalStatus.pending_approval]),
             )
         )
         pending_goals = len(list(pending_goals_result.scalars().all()))

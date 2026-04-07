@@ -18,6 +18,7 @@ import { GoalTimeline } from "@/components/goals/GoalTimeline";
 import { SectionContainer } from "@/components/layout/SectionContainer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { aiService } from "@/services/ai";
+import { goalsService } from "@/services/goals";
 import { leadershipGoalsService } from "@/services/leadership-goals";
 import { managerService } from "@/services/manager";
 import { useGoalsStore } from "@/store/useGoalsStore";
@@ -28,7 +29,9 @@ import type {
   CascadedManagerGoal,
   EmployeeCascadeSuggestion,
   GoalLineageImpact,
+  ManagerPendingGoal,
   ManagerTeamMember,
+  SelfGoalSummary,
 } from "@/types";
 import { toast } from "sonner";
 
@@ -64,7 +67,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function GoalsPage() {
-  const { goals, loading, fetchGoals, addGoal, submitGoal } = useGoalsStore();
+  const { goals, loading, fetchGoals, addGoal, submitGoal, requestApproval, withdrawGoal } = useGoalsStore();
   const user = useSessionStore((s) => s.user);
   const activeMode = useSessionStore((s) => s.activeMode);
   const isManagerMode = activeMode === "manager";
@@ -81,6 +84,9 @@ export default function GoalsPage() {
   const [cascadeDraft, setCascadeDraft] = useState<Record<string, { employee_id: string; target_value: number; target_percentage: number }>>({});
   const [aiSplitSuggestions, setAiSplitSuggestions] = useState<EmployeeCascadeSuggestion[]>([]);
   const [lineageByGoal, setLineageByGoal] = useState<Record<string, GoalLineageImpact>>({});
+  const [selfGoalSummary, setSelfGoalSummary] = useState<SelfGoalSummary | null>(null);
+  const [managerPendingGoals, setManagerPendingGoals] = useState<ManagerPendingGoal[]>([]);
+  const [managerComments, setManagerComments] = useState<Record<string, string>>({});
   const [showCreateForm, setShowCreateForm] = useState(false);
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -103,10 +109,12 @@ export default function GoalsPage() {
       Promise.all([
         leadershipGoalsService.listManagerCascadedGoals(),
         managerService.getTeam({ silent: true }),
+        goalsService.getManagerPendingGoals(),
       ])
-        .then(([goalsData, team]) => {
+        .then(([goalsData, team, pending]) => {
           setManagerCascadeGoals(goalsData);
           setTeamMembers(team);
+          setManagerPendingGoals(pending);
           if (goalsData.length > 0) {
             setSelectedManagerCascadeGoalId((previous) => previous || goalsData[0].goal_id);
           }
@@ -116,10 +124,10 @@ export default function GoalsPage() {
     }
 
     if (isEmployee) {
-      leadershipGoalsService
-        .listEmployeeCascadedGoals()
-        .then((goalsData) => {
+      Promise.all([leadershipGoalsService.listEmployeeCascadedGoals(), goalsService.getSelfGoalSummary()])
+        .then(([goalsData, summary]) => {
           setEmployeeCascadeGoals(goalsData);
+          setSelfGoalSummary(summary);
         })
         .catch(() => null);
     }
@@ -127,7 +135,18 @@ export default function GoalsPage() {
 
   const onSubmit = async (values: FormValues) => {
     try {
-      await addGoal(values);
+      if (isEmployee) {
+        await goalsService.selfCreateGoal({
+          title: values.title,
+          description: values.description,
+          weightage: values.weightage,
+          framework: values.framework,
+        });
+        await fetchGoals();
+        setSelfGoalSummary(await goalsService.getSelfGoalSummary());
+      } else {
+        await addGoal(values);
+      }
       toast.success("Goal created");
       form.reset({ title: "", description: "", weightage: 25, progress: 0, framework: "OKR" });
       setShowCreateForm(false);
@@ -295,6 +314,51 @@ export default function GoalsPage() {
     }
   };
 
+  const handleRequestApproval = async (goalId: string) => {
+    try {
+      await requestApproval(goalId);
+      if (isEmployee) {
+        setSelfGoalSummary(await goalsService.getSelfGoalSummary());
+      }
+      toast.success("Goal sent for manager approval");
+    } catch {
+      toast.error("Unable to request approval");
+    }
+  };
+
+  const handleWithdrawGoal = async (goalId: string) => {
+    try {
+      await withdrawGoal(goalId);
+      if (isEmployee) {
+        setSelfGoalSummary(await goalsService.getSelfGoalSummary());
+      }
+      toast.success("Approval request withdrawn");
+    } catch {
+      toast.error("Unable to withdraw goal");
+    }
+  };
+
+  const handleManagerDecision = async (goalId: string, action: "approve" | "request-edit" | "reject") => {
+    const comment = managerComments[goalId]?.trim();
+    try {
+      if (action === "approve") {
+        await goalsService.managerApproveGoal(goalId, comment);
+      } else if (action === "request-edit") {
+        await goalsService.managerRequestEdit(goalId, comment);
+      } else {
+        await goalsService.managerRejectGoal(goalId, comment);
+      }
+
+      const pending = await goalsService.getManagerPendingGoals();
+      await fetchGoals();
+      setManagerPendingGoals(pending);
+      setManagerComments((prev) => ({ ...prev, [goalId]: "" }));
+      toast.success("Decision saved");
+    } catch {
+      toast.error("Unable to save manager decision");
+    }
+  };
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-7">
       <PageHeader
@@ -324,6 +388,30 @@ export default function GoalsPage() {
       />
 
       <SectionContainer columns="dashboard">
+        {isEmployee && selfGoalSummary ? (
+          <Card className="space-y-3 rounded-2xl border border-border/75 bg-card/95 xl:col-span-12">
+            <CardTitle>Self-Created Goal Tracker</CardTitle>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <div className="rounded-xl border border-border/70 p-3">
+                <p className="text-xs text-muted-foreground">Total Weightage</p>
+                <p className="text-lg font-semibold text-foreground">{selfGoalSummary.total_weightage.toFixed(1)}%</p>
+              </div>
+              <div className="rounded-xl border border-border/70 p-3">
+                <p className="text-xs text-muted-foreground">Pending Approval</p>
+                <p className="text-lg font-semibold text-warning">{selfGoalSummary.pending_approval_count}</p>
+              </div>
+              <div className="rounded-xl border border-border/70 p-3">
+                <p className="text-xs text-muted-foreground">Edit Requested</p>
+                <p className="text-lg font-semibold text-info">{selfGoalSummary.edit_requested_count}</p>
+              </div>
+              <div className="rounded-xl border border-border/70 p-3">
+                <p className="text-xs text-muted-foreground">Approved</p>
+                <p className="text-lg font-semibold text-success">{selfGoalSummary.approved_count}</p>
+              </div>
+            </div>
+          </Card>
+        ) : null}
+
         {canGenerateAiGoals && aiGoals.length > 0 ? (
           <Card className="space-y-4 rounded-2xl border border-border/75 bg-card/95 xl:col-span-12">
             <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
@@ -435,6 +523,41 @@ export default function GoalsPage() {
                 : "Manager-assigned and self-created goals are listed below with their Goal ID for meeting creation."}
             </CardDescription>
           </Card>
+
+          {isManagerMode ? (
+            <Card className="space-y-4 rounded-2xl border border-border/75 bg-card/95">
+              <CardTitle>Pending Self-Created Goal Approvals</CardTitle>
+              <CardDescription>Review employee-submitted self-created goals and approve, request edits, or reject with comments.</CardDescription>
+
+              {managerPendingGoals.length === 0 ? <p className="text-sm text-muted-foreground">No pending self-created goals.</p> : null}
+
+              {managerPendingGoals.map((item) => (
+                <div key={item.goal.id} className="space-y-3 rounded-xl border border-border/70 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">{item.goal.title}</p>
+                      <p className="text-xs text-muted-foreground">{item.employee_name} ({item.employee_role}) | {item.employee_department || "General"}</p>
+                    </div>
+                    <Badge>{item.goal.weightage}%</Badge>
+                  </div>
+                  {item.goal.description ? <p className="text-xs text-muted-foreground">{item.goal.description}</p> : null}
+                  {item.goal.ai_assessment && typeof item.goal.ai_assessment["quality_score"] === "number" ? (
+                    <p className="text-xs text-muted-foreground">AI assessment score: {(Number(item.goal.ai_assessment["quality_score"]) * 100).toFixed(0)}%</p>
+                  ) : null}
+                  <Textarea
+                    placeholder="Add comment for employee"
+                    value={managerComments[item.goal.id] || ""}
+                    onChange={(event) => setManagerComments((prev) => ({ ...prev, [item.goal.id]: event.target.value }))}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => handleManagerDecision(item.goal.id, "approve")}>Approve</Button>
+                    <Button size="sm" variant="secondary" onClick={() => handleManagerDecision(item.goal.id, "request-edit")}>Request Edit</Button>
+                    <Button size="sm" variant="outline" onClick={() => handleManagerDecision(item.goal.id, "reject")}>Reject</Button>
+                  </div>
+                </div>
+              ))}
+            </Card>
+          ) : null}
 
           {isManagerMode ? (
             <Card className="space-y-4 rounded-2xl border border-border/75 bg-card/95">
@@ -566,7 +689,13 @@ export default function GoalsPage() {
               : goals.length === 0
                 ? <Card className="md:col-span-2"><CardDescription>No goals yet. Create one to see it here.</CardDescription></Card>
               : goals.map((goal) => (
-                  <GoalCard key={goal.id} goal={goal} onSubmit={(id) => submitGoal(id).then(() => toast.success("Goal submitted"))} />
+                  <GoalCard
+                    key={goal.id}
+                    goal={goal}
+                    onSubmit={(id) => submitGoal(id).then(() => toast.success("Goal submitted"))}
+                    onRequestApproval={isEmployee ? handleRequestApproval : undefined}
+                    onWithdraw={isEmployee ? handleWithdrawGoal : undefined}
+                  />
                 ))}
           </div>
 
