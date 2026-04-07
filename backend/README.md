@@ -64,6 +64,16 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+## Seed Mock Data
+Use the seed script to populate realistic demo records for dashboards and key workflows:
+
+```bash
+python -m alembic -c migrations/alembic.ini upgrade head
+PYTHONPATH=. python scripts/seed_mock_data.py
+```
+
+This seeds organizations, users, performance cycles, goals, check-ins, ratings, and reviews.
+
 ## Alembic Migration
 ```bash
 alembic -c migrations/alembic.ini upgrade head
@@ -85,6 +95,21 @@ docker run --env-file .env -p 8000:8000 pms-backend
 - `GET /api/v1/users/me`
 - `GET /api/v1/users/team`
 - `PATCH /api/v1/users/update`
+
+### Employees
+- `GET /api/v1/employees`
+- `GET /api/v1/employees/{id}`
+- `GET /api/v1/employees/manager/{manager_id}`
+- `POST /api/v1/employees` (Admin only)
+- `PATCH /api/v1/employees/{id}` (Admin only)
+- `DELETE /api/v1/employees/{id}` (Admin only)
+
+### Performance Cycles
+- `GET /api/v1/performance-cycles`
+- `GET /api/v1/performance-cycles/active`
+- `GET /api/v1/performance-cycles/framework/recommend?role=...&department=...`
+- `POST /api/v1/performance-cycles` (HR/Admin only)
+- `PATCH /api/v1/performance-cycles/{id}` (HR/Admin only)
 
 ### Organizations
 - `POST /api/v1/organizations`

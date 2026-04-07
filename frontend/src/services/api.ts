@@ -1,6 +1,11 @@
 import axios from "axios";
 import { authCookies } from "@/lib/cookies";
+import { useSessionStore } from "@/store/useSessionStore";
 import { toast } from "sonner";
+
+type ApiRequestConfig = {
+  skipErrorToast?: boolean;
+};
 
 function normalizeErrorMessage(value: unknown): string {
   if (typeof value === "string" && value.trim()) {
@@ -44,6 +49,19 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+
+  const session = useSessionStore.getState();
+  const mode = session.activeMode;
+  const user = session.user;
+  const userRoles = new Set(user?.roles ?? (user?.role ? [user.role] : []));
+  const isManagerCapable = userRoles.has("manager") || user?.role === "manager";
+
+  if (mode && isManagerCapable) {
+    config.headers["x-user-mode"] = mode;
+  } else if (config.headers && "x-user-mode" in config.headers) {
+    delete config.headers["x-user-mode"];
+  }
+
   return config;
 });
 
@@ -57,6 +75,7 @@ api.interceptors.response.use(
   },
   async (error) => {
     const status = error?.response?.status;
+    const skipErrorToast = Boolean((error?.config as ApiRequestConfig | undefined)?.skipErrorToast);
     const requestUrl = error?.config?.url
       ? String(error.config.url).startsWith("http")
         ? String(error.config.url)
@@ -103,6 +122,10 @@ api.interceptors.response.use(
       if (typeof window !== "undefined") {
         window.location.href = "/";
       }
+    }
+
+    if (skipErrorToast) {
+      return Promise.reject(error);
     }
 
     toast.error(detail);

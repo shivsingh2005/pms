@@ -3,11 +3,13 @@ import type { Meeting } from "@/types";
 
 interface MeetingPayload {
   title: string;
+  meeting_type?: "CHECKIN" | "GENERAL" | "HR" | "REVIEW";
   description?: string;
   start_time: string;
   end_time: string;
   participants: string[];
-  goal_id: string;
+  checkin_id?: string;
+  goal_id?: string;
 }
 
 export const meetingsService = {

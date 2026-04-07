@@ -13,6 +13,7 @@ class RatingCreate(BaseModel):
 
 class RatingOut(BaseModel):
     id: str
+    cycle_id: str | None = None
     goal_id: str
     manager_id: str
     employee_id: str

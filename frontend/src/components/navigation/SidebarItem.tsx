@@ -35,3 +35,4 @@ export function SidebarItem({ href, label, active, icon: Icon, collapsed = false
     </Link>
   );
 }
+

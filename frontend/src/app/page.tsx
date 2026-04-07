@@ -1,25 +1,42 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import { authService } from "@/services/auth";
 import { authCookies } from "@/lib/cookies";
 import { useSessionStore } from "@/store/useSessionStore";
+import { resolveDefaultRouteForRole } from "@/lib/role-access";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-const roles = ["employee", "manager", "hr", "leadership", "admin"] as const;
+function normalizeLoginEmail(email: string): string | null {
+  const trimmed = email.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+
+  return trimmed;
+}
 
 export default function HomePage() {
   const router = useRouter();
-  const [role, setRole] = useState<(typeof roles)[number]>("employee");
-  const [email, setEmail] = useState("employee@example.com");
-  const [name, setName] = useState("Demo User");
+  const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
+  const user = useSessionStore((state) => state.user);
   const setUser = useSessionStore((state) => state.setUser);
+  const logout = useSessionStore((state) => state.logout);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    router.replace(resolveDefaultRouteForRole(user.role));
+  }, [router, user]);
 
   return (
     <div className="relative grid min-h-[78vh] place-items-center overflow-hidden">
@@ -35,19 +52,6 @@ export default function HomePage() {
             <CardDescription>Modern performance management with goals, check-ins, reviews, and AI guidance.</CardDescription>
           </div>
 
-          <label className="text-sm font-medium text-foreground">Role</label>
-          <select
-            className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm text-foreground focus:border-primary/55 focus:outline-none focus:ring-2 focus:ring-primary/30"
-            value={role}
-            onChange={(e) => setRole(e.target.value as (typeof roles)[number])}
-          >
-            {roles.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-
           <label className="text-sm font-medium text-foreground">Email</label>
           <Input
             value={email}
@@ -56,25 +60,40 @@ export default function HomePage() {
             type="email"
           />
 
-          <label className="text-sm font-medium text-foreground">Name</label>
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Your name"
-          />
-
           <div className="pt-1">
             <Button
               className="w-full"
-              disabled={loading || !email.trim() || !name.trim()}
+              disabled={loading || !email.trim()}
               onClick={async () => {
                 setLoading(true);
                 try {
-                  const token = await authService.roleLogin({ role, email: email.trim(), name: name.trim() });
+                  const normalizedEmail = normalizeLoginEmail(email);
+                  if (!normalizedEmail) {
+                    return;
+                  }
+
+                  const token = await authService.login({ email: normalizedEmail });
+
+                  // Reset in-memory session state before applying the new login response.
+                  logout();
+                  authCookies.clearToken();
+                  authCookies.clearRefreshToken();
+
                   authCookies.setToken(token.access_token);
                   authCookies.setRefreshToken(token.refresh_token);
+
                   const me = await authService.me();
                   setUser(me);
+                  localStorage.setItem("user", JSON.stringify(me));
+                  localStorage.setItem(
+                    "session",
+                    JSON.stringify({
+                      userId: me.id,
+                      email: me.email,
+                      role: me.role,
+                    }),
+                  );
+                  toast.success(`Welcome back, ${me.name}`);
 
                   // Smooth OAuth onboarding: if Google is not connected yet, start OAuth right after app sign-in.
                   try {
@@ -90,13 +109,14 @@ export default function HomePage() {
                     // If Google OAuth cannot be initialized, continue with app sign-in session.
                   }
 
-                  router.push("/dashboard");
+                  const targetRoute = resolveDefaultRouteForRole(me.role);
+                  router.replace(targetRoute);
                 } finally {
                   setLoading(false);
                 }
               }}
             >
-              {loading ? "Signing in..." : "Sign in"}
+              {loading ? "Signing in..." : "Sign In"}
             </Button>
           </div>
         </Card>
@@ -104,3 +124,4 @@ export default function HomePage() {
     </div>
   );
 }
+

@@ -19,7 +19,7 @@ async def get_me(current_user: User = Depends(get_current_user)) -> UserOut:
 @router.get("/team", response_model=list[UserOut])
 async def get_team(
     current_user: User = Depends(
-        require_roles(UserRole.manager, UserRole.hr, UserRole.leadership, UserRole.admin)
+        require_roles(UserRole.manager, UserRole.hr, UserRole.leadership)
     ),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserOut]:
@@ -33,8 +33,8 @@ async def update_me(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> UserOut:
-    if payload.role and current_user.role not in {UserRole.hr, UserRole.admin}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only HR/Admin can change roles")
+    if payload.role and current_user.role != UserRole.hr:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only HR can change roles")
 
     updated = await UserService.update_user(current_user, payload, db)
     return UserOut.model_validate(updated)

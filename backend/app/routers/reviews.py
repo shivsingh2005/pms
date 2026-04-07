@@ -4,7 +4,13 @@ from app.core.rbac import require_roles
 from app.database import get_db
 from app.models.enums import UserRole
 from app.models.user import User
-from app.schemas.review import ReviewAnalyticsOut, ReviewGenerateRequest, ReviewOut
+from app.schemas.review import (
+    ReviewAnalyticsOut,
+    ReviewGenerateRequest,
+    ReviewNarrativeOut,
+    ReviewNarrativeRequest,
+    ReviewOut,
+)
 from app.services.review_service import ReviewService
 from app.utils.dependencies import get_current_user
 
@@ -23,7 +29,7 @@ async def list_reviews(
 @router.post("/generate", response_model=ReviewOut)
 async def generate_review(
     payload: ReviewGenerateRequest,
-    manager: User = Depends(require_roles(UserRole.manager, UserRole.hr, UserRole.admin)),
+    manager: User = Depends(require_roles(UserRole.manager, UserRole.hr)),
     db: AsyncSession = Depends(get_db),
 ) -> ReviewOut:
     review = await ReviewService.generate_review(manager, payload, db)
@@ -32,8 +38,18 @@ async def generate_review(
 
 @router.get("/analytics", response_model=ReviewAnalyticsOut)
 async def review_analytics(
-    _: User = Depends(require_roles(UserRole.hr, UserRole.leadership, UserRole.admin)),
+    _: User = Depends(require_roles(UserRole.hr, UserRole.leadership)),
     db: AsyncSession = Depends(get_db),
 ) -> ReviewAnalyticsOut:
     analytics = await ReviewService.analytics(db)
     return ReviewAnalyticsOut(**analytics)
+
+
+@router.post("/narrative", response_model=ReviewNarrativeOut)
+async def review_narrative(
+    payload: ReviewNarrativeRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ReviewNarrativeOut:
+    narrative = await ReviewService.narrative(current_user, payload, db)
+    return ReviewNarrativeOut(**narrative)

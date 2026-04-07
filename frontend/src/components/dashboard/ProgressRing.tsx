@@ -39,3 +39,4 @@ export function ProgressRing({ value, size = 92 }: { value: number; size?: numbe
     </div>
   );
 }
+
