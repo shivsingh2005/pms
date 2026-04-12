@@ -11,6 +11,7 @@ import { hrService } from "@/services/hr";
 import { reportsService } from "@/services/reports";
 import { useLeadershipPortalData } from "@/hooks/useLeadershipPortalData";
 import { useSessionStore } from "@/store/useSessionStore";
+import { resolveTrainingFocus, summarizeTopTrainingFocus } from "@/lib/training-focus";
 
 type LeadershipReportType = "performance" | "attrition" | "training" | "manager-effectiveness";
 
@@ -104,6 +105,20 @@ export default function LeadershipReportsPage() {
     return REPORT_OPTIONS.find((option) => option.value === reportType) || REPORT_OPTIONS[0];
   }, [reportType]);
 
+  const mostNeededTrainingType = useMemo(() => {
+    const focuses = peopleInsights
+      .filter((entry) => entry.needsTraining)
+      .map((entry) =>
+        resolveTrainingFocus({
+          progress: Number(entry.progress ?? 0),
+          consistency: Number(entry.consistency ?? 0),
+          rating: Number(entry.rating ?? 0),
+          needsTraining: Boolean(entry.needsTraining),
+        }),
+      );
+    return summarizeTopTrainingFocus(focuses);
+  }, [peopleInsights]);
+
   const reportSummary = useMemo(() => {
     const base = {
       Employees: summarySnapshot.employees,
@@ -128,6 +143,7 @@ export default function LeadershipReportsPage() {
         ...base,
         "Training Needed": peopleInsights.filter((entry) => entry.needsTraining).length,
         "Ready Now": peopleInsights.filter((entry) => entry.promotionReadiness === "Ready Now").length,
+        "Most Needed Training Type": mostNeededTrainingType,
       };
     }
 
@@ -228,6 +244,12 @@ export default function LeadershipReportsPage() {
             rating: employee.rating,
             progress: employee.progress,
             consistency: employee.consistency,
+            training_focus: resolveTrainingFocus({
+              progress: Number(employee.progress ?? 0),
+              consistency: Number(employee.consistency ?? 0),
+              rating: Number(employee.rating ?? 0),
+              needsTraining: Boolean(employee.needsTraining),
+            }),
             readiness: employee.promotionReadiness,
           }));
         setReportRows(rows);

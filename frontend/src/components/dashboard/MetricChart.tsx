@@ -1,20 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  Cell,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "@/components/charts/recharts-lazy";
+import { MetricChartCanvas } from "@/components/charts/MetricChartCanvas";
 
 interface MetricChartProps {
   kind: "area" | "bar" | "line";
@@ -73,72 +60,16 @@ export function MetricChart({
       transition={{ duration: 0.35, ease: "easeOut" }}
       className={`h-64 rounded-xl border border-border bg-surface p-4 flex items-center justify-center shadow-soft ${className ?? ""}`}
     >
-      <ResponsiveContainer width="100%" height="100%">
-        {kind === "area" ? (
-          <AreaChart data={data}>
-            <defs>
-              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={CHART_COLORS.blue} stopOpacity={0.8} />
-                <stop offset="100%" stopColor={CHART_COLORS.purple} stopOpacity={0.1} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 4" />
-            <XAxis dataKey={xKey} tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-            <YAxis tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-            <Tooltip
-              cursor={{ stroke: "hsl(var(--border))", strokeDasharray: "4 4" }}
-              contentStyle={chartTooltipStyle}
-              labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600, marginBottom: 4 }}
-            />
-            <Area type="monotone" dataKey={yKey} stroke={CHART_COLORS.blue} strokeWidth={3} fill={`url(#${gradientId})`} isAnimationActive animationDuration={700} />
-          </AreaChart>
-        ) : kind === "line" ? (
-          <LineChart data={data}>
-            <defs>
-              <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor={CHART_COLORS.blue} />
-                <stop offset="100%" stopColor={CHART_COLORS.purple} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 4" />
-            <XAxis dataKey={xKey} tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-            <YAxis tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-            <Tooltip
-              cursor={{ stroke: "hsl(var(--border))", strokeDasharray: "4 4" }}
-              contentStyle={chartTooltipStyle}
-              labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600, marginBottom: 4 }}
-            />
-            <Line
-              type="monotone"
-              dataKey={yKey}
-              stroke={`url(#${gradientId})`}
-              strokeWidth={3}
-              dot={{ r: 4, fill: CHART_COLORS.blue, stroke: "hsl(var(--card))", strokeWidth: 2 }}
-              activeDot={{ r: 6, fill: CHART_COLORS.purple, stroke: "hsl(var(--card))", strokeWidth: 2 }}
-              isAnimationActive
-              animationDuration={750}
-            />
-          </LineChart>
-        ) : (
-          <BarChart data={data}>
-            <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 4" />
-            <XAxis dataKey={xKey} tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-            <YAxis tickLine={false} axisLine={false} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-            <Tooltip
-              cursor={{ fill: "hsl(var(--muted) / 0.4)" }}
-              contentStyle={chartTooltipStyle}
-              labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600, marginBottom: 4 }}
-            />
-            <Bar dataKey={yKey} fill={color} radius={[8, 8, 8, 8]} isAnimationActive animationDuration={700}>
-              {data.map((entry, index) => {
-                const paletteKey = String(entry[xKey]);
-                const barColor = barPalette?.[paletteKey] || color;
-                return <Cell key={`bar-cell-${index}`} fill={barColor} />;
-              })}
-            </Bar>
-          </BarChart>
-        )}
-      </ResponsiveContainer>
+      <MetricChartCanvas
+        kind={kind}
+        data={data}
+        xKey={xKey}
+        yKey={yKey}
+        color={color}
+        barPalette={barPalette}
+        chartTooltipStyle={chartTooltipStyle}
+        gradientId={gradientId}
+      />
     </motion.div>
   );
 }

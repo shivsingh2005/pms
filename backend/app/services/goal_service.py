@@ -2,12 +2,12 @@ from datetime import datetime, timedelta, timezone
 import re
 from uuid import UUID
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.ai_service import AIService
 from app.models.annual_operating_plan import AnnualOperatingPlan
 from app.models.checkin import Checkin
-from app.models.enums import CheckinStatus, GoalStatus, UserRole
+from app.models.enums import CheckinStatus, GoalStatus, PerformanceCycleStatus, UserRole
 from app.models.goal import Goal, GoalApprovalHistory, GoalChangeLog, GoalLineage
 from app.models.goal_assignment import GoalAssignment
 from app.models.kpi_library import KPILibrary
@@ -19,6 +19,19 @@ from app.schemas.goal import GoalAssignRequest, GoalAssignmentOneRequest, GoalCa
 
 class GoalService:
     MAX_WORKLOAD = 100.0
+    _approval_history_table_available: bool | None = None
+    _goal_change_logs_table_available: bool | None = None
+
+    @staticmethod
+    async def _table_exists(db: AsyncSession, table_name: str) -> bool:
+        try:
+            result = await db.execute(
+                text("SELECT to_regclass(:table_name)"),
+                {"table_name": table_name},
+            )
+            return result.scalar_one_or_none() is not None
+        except Exception:
+            return False
 
     @staticmethod
     def _role_key_from_text(value: str | None) -> str:
@@ -50,6 +63,32 @@ class GoalService:
         if not base:
             return f"KPI: {kpi_text}"
         return f"{base}\n\nKPI: {kpi_text}"
+
+    @staticmethod
+    async def _resolve_employee_manager_id(employee: User, db: AsyncSession) -> UUID | None:
+        if employee.manager_id:
+            return employee.manager_id
+
+        try:
+            manager_result = await db.execute(
+                select(User.id)
+                .where(
+                    User.organization_id == employee.organization_id,
+                    User.role == UserRole.manager,
+                    User.is_active.is_(True),
+                    User.id != employee.id,
+                )
+                .order_by(User.created_at.asc())
+                .limit(1)
+            )
+            manager_id = manager_result.scalar_one_or_none()
+        except Exception:
+            manager_id = None
+
+        if manager_id:
+            employee.manager_id = manager_id
+            await db.flush()
+        return manager_id
 
     @staticmethod
     def _goal_snapshot(goal: Goal) -> dict:
@@ -105,6 +144,11 @@ class GoalService:
         comment: str | None = None,
         ai_assessment: dict | None = None,
     ) -> None:
+        if GoalService._approval_history_table_available is None:
+            GoalService._approval_history_table_available = await GoalService._table_exists(db, "goal_approval_history")
+        if not GoalService._approval_history_table_available:
+            return
+
         event = GoalApprovalHistory(
             goal_id=goal.id,
             actor_id=actor_id,
@@ -126,6 +170,11 @@ class GoalService:
         db: AsyncSession,
         note: str | None = None,
     ) -> None:
+        if GoalService._goal_change_logs_table_available is None:
+            GoalService._goal_change_logs_table_available = await GoalService._table_exists(db, "goal_change_logs")
+        if not GoalService._goal_change_logs_table_available:
+            return
+
         log = GoalChangeLog(
             goal_id=goal_id,
             changed_by=changed_by,
@@ -137,50 +186,68 @@ class GoalService:
         db.add(log)
 
     @staticmethod
-    async def _build_goal_grounding_context(manager: User, db: AsyncSession) -> str | None:
-        current_year = datetime.now(timezone.utc).year
-        aop_result = await db.execute(
-            select(AnnualOperatingPlan)
-            .where(
-                AnnualOperatingPlan.organization_id == manager.organization_id,
-                AnnualOperatingPlan.year == current_year,
+    async def _build_goal_grounding_context(
+        manager_id: UUID,
+        organization_id: UUID,
+        db: AsyncSession,
+    ) -> str | None:
+        try:
+            aop_result = await db.execute(
+                select(AnnualOperatingPlan)
+                .where(
+                    AnnualOperatingPlan.organization_id == organization_id,
+                )
+                .where(AnnualOperatingPlan.status == "active")
+                .order_by(AnnualOperatingPlan.created_at.desc())
+                .limit(5)
             )
-            .order_by(AnnualOperatingPlan.created_at.desc())
-            .limit(5)
-        )
-        aop_rows = list(aop_result.scalars().all())
+            aop_rows = list(aop_result.scalars().all())
+        except Exception:
+            # Keep AI generation alive even if DB schema is behind model definitions.
+            await db.rollback()
+            aop_rows = []
 
         team_result = await db.execute(
             select(User)
             .where(
-                User.manager_id == manager.id,
-                User.organization_id == manager.organization_id,
+                    User.manager_id == manager_id,
+                    User.organization_id == organization_id,
                 User.is_active.is_(True),
             )
             .limit(30)
         )
         team_rows = list(team_result.scalars().all())
-        titles = {row.title.strip() for row in team_rows if row.title and row.title.strip()}
-        departments = {row.department.strip() for row in team_rows if row.department and row.department.strip()}
-
         kpi_snippets: list[str] = []
-        if titles or departments:
-            kpi_stmt = select(KPILibrary)
-            if titles:
-                kpi_stmt = kpi_stmt.where(KPILibrary.role.in_(list(titles)))
-            if departments:
-                kpi_stmt = kpi_stmt.where(KPILibrary.department.in_(list(departments)))
-
+        try:
             kpi_result = await db.execute(
-                kpi_stmt.order_by(KPILibrary.updated_at.desc()).limit(8)
+                select(KPILibrary)
+                .where(
+                    KPILibrary.organization_id == organization_id,
+                    KPILibrary.is_active.is_(True),
+                )
+                .order_by(KPILibrary.created_at.desc())
+                .limit(8)
             )
             for row in list(kpi_result.scalars().all()):
-                kpi_snippets.append(f"{row.role}: {row.goal_title} (KPI: {row.suggested_kpi})")
+                label = (getattr(row, "name", None) or getattr(row, "goal_title", None) or getattr(row, "category", None) or "KPI")
+                details = (getattr(row, "description", None) or getattr(row, "suggested_kpi", None) or "")
+                target_value = getattr(row, "target_value", None)
+                unit = getattr(row, "unit", None)
+                if target_value is not None and unit:
+                    details = f"{details} Target: {target_value} {unit}".strip()
+                kpi_snippets.append(f"{label}: {details}".strip())
+        except Exception:
+            await db.rollback()
+            kpi_snippets = []
 
         if not aop_rows and not kpi_snippets:
             return None
 
-        aop_lines = [f"{row.year}-{row.department or 'org'}: {row.objective}" for row in aop_rows]
+        aop_lines = []
+        for row in aop_rows:
+            label = getattr(row, "name", None) or getattr(row, "objective", None) or "AOP objective"
+            detail = getattr(row, "description", None) or getattr(row, "target_metric", None) or "No description"
+            aop_lines.append(f"{label}: {detail}")
         fragments: list[str] = []
         if aop_lines:
             fragments.append("AOP context:\n" + "\n".join(f"- {line}" for line in aop_lines))
@@ -224,7 +291,7 @@ class GoalService:
             select(PerformanceCycle.id)
             .where(
                 PerformanceCycle.organization_id == organization_id,
-                PerformanceCycle.is_active.is_(True),
+                cast(PerformanceCycle.status, String) == PerformanceCycleStatus.active.value,
             )
             .order_by(PerformanceCycle.start_date.desc())
             .limit(1)
@@ -234,7 +301,7 @@ class GoalService:
     @staticmethod
     async def create_goal(current_user: User, payload: GoalCreate, db: AsyncSession) -> Goal:
         active_cycle_id = await GoalService._active_cycle_id_for_org(current_user.organization_id, db)
-        source_type = "self_created" if current_user.role == UserRole.employee else "manager_assigned"
+        source_type = "self_created" if current_user.role in {UserRole.employee, UserRole.manager, UserRole.leadership} else "manager_assigned"
         goal = Goal(
             cycle_id=active_cycle_id,
             user_id=current_user.id,
@@ -382,6 +449,9 @@ class GoalService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
         await ensure_cycle_writable(db, goal.cycle_id, locked_detail="Cannot reject goal in a locked cycle")
 
+        if not (manager_comment or "").strip():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Rejection reason is required")
+
         owner = await db.get(User, goal.user_id)
         if not owner or not owner.is_active:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal owner not found")
@@ -423,6 +493,7 @@ class GoalService:
         if employee.role != UserRole.employee:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only employees can self-create goals")
 
+        manager_id = await GoalService._resolve_employee_manager_id(employee, db)
         active_cycle_id = await GoalService._active_cycle_id_for_org(employee.organization_id, db)
         await ensure_cycle_writable(db, active_cycle_id, locked_detail="Cannot create goals in a locked cycle")
 
@@ -435,7 +506,7 @@ class GoalService:
             cycle_id=active_cycle_id,
             user_id=employee.id,
             assigned_to=employee.id,
-            assigned_by=employee.manager_id,
+            assigned_by=manager_id,
             title=payload.title,
             description=payload.description,
             weightage=payload.weightage,
@@ -477,7 +548,8 @@ class GoalService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only self-created goals can use this workflow")
         if goal.status not in {GoalStatus.draft, GoalStatus.edit_requested}:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Goal is not in a submittable state")
-        if not employee.manager_id:
+        manager_id = await GoalService._resolve_employee_manager_id(employee, db)
+        if not manager_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No manager assigned for approval")
 
         await ensure_cycle_writable(db, goal.cycle_id, locked_detail="Cannot submit goal in a locked cycle")
@@ -764,13 +836,17 @@ class GoalService:
         if manager.role != UserRole.manager:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only managers can generate role goal recommendations")
 
+        manager_id = manager.id
+        organization_id = manager.organization_id
+        manager_department = manager.department
+
         ai = AIService()
-        grounding_context = await GoalService._build_goal_grounding_context(manager, db)
-        role_intelligence = GoalService._external_role_intelligence("manager", manager.department)
+        grounding_context = await GoalService._build_goal_grounding_context(manager_id, organization_id, db)
+        role_intelligence = GoalService._external_role_intelligence("manager", manager_department)
         try:
             generated = await ai.generate_team_goals(
                 requester=manager,
-                manager_id=str(manager.id),
+                manager_id=str(manager_id),
                 organization_objectives=organization_objectives,
                 grounding_context=grounding_context,
                 role_intelligence=role_intelligence,
@@ -781,9 +857,11 @@ class GoalService:
         except RuntimeError as exc:
             message = str(exc)
             if "Quarterly AI usage cap reached" in message:
-                generated = await GoalService._fallback_role_goal_recommendations(manager, db)
+                generated = await GoalService._fallback_role_goal_recommendations(manager_id, organization_id, db)
             else:
                 raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=message) from exc
+        except Exception:
+            generated = await GoalService._fallback_role_goal_recommendations(manager_id, organization_id, db)
 
         clusters: dict[str, list[dict]] = {}
         role_labels: dict[str, str] = {}
@@ -830,17 +908,17 @@ class GoalService:
         ]
 
         return {
-            "manager_id": manager.id,
+            "manager_id": manager_id,
             "clusters": cluster_payload,
         }
 
     @staticmethod
-    async def _fallback_role_goal_recommendations(manager: User, db: AsyncSession) -> dict:
+    async def _fallback_role_goal_recommendations(manager_id: UUID, organization_id: UUID, db: AsyncSession) -> dict:
         team_result = await db.execute(
             select(User.id, User.name, User.title, User.role, User.department)
             .where(
-                User.manager_id == manager.id,
-                User.organization_id == manager.organization_id,
+                User.manager_id == manager_id,
+                User.organization_id == organization_id,
                 User.is_active.is_(True),
                 User.role == UserRole.employee,
             )
@@ -925,7 +1003,7 @@ class GoalService:
             )
 
         return {
-            "manager_id": str(manager.id),
+            "manager_id": str(manager_id),
             "employees": employees,
         }
 
@@ -1034,11 +1112,10 @@ class GoalService:
 
         assignment = GoalAssignment(
             goal_id=goal.id,
-            employee_id=employee.id,
-            manager_id=manager.id,
-            role_key=requested_role_key,
-            weight=payload.weightage,
-            status="approved" if payload.approve else "assigned",
+            assigned_to_user_id=employee.id,
+            assigned_by_user_id=manager.id,
+            weightage=payload.weightage,
+            status=GoalStatus.approved if payload.approve else GoalStatus.draft,
         )
         db.add(assignment)
         await GoalService._log_goal_change(goal.id, manager.id, "assigned", None, GoalService._goal_snapshot(goal), db)

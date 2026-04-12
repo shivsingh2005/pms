@@ -1,0 +1,1 @@
+export { HRSidebar as default } from "@/components/navigation/HRSidebar";

@@ -3,12 +3,14 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "@/components/charts/recharts-lazy";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { MetricChart } from "@/components/dashboard/MetricChart";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LazyPieChart } from "@/components/charts";
+import { fixed } from "@/lib/safe";
+import { resolveTrainingFocus, summarizeTopTrainingFocus } from "@/lib/training-focus";
 import { useLeadershipPortalData } from "@/hooks/useLeadershipPortalData";
 import { useSessionStore } from "@/store/useSessionStore";
 
@@ -43,6 +45,20 @@ export default function LeadershipTalentInsightsPage() {
     peopleInsights,
     trainingNeedSummary,
   } = useLeadershipPortalData({ range: "quarter" });
+
+  const mostNeededTrainingType = useMemo(() => {
+    const focuses = peopleInsights
+      .filter((person) => person.needsTraining)
+      .map((person) =>
+        resolveTrainingFocus({
+          progress: Number(person.progress ?? 0),
+          consistency: Number(person.consistency ?? 0),
+          rating: Number(person.rating ?? 0),
+          needsTraining: Boolean(person.needsTraining),
+        }),
+      );
+    return summarizeTopTrainingFocus(focuses);
+  }, [peopleInsights]);
 
   useEffect(() => {
     if (!user) {
@@ -89,8 +105,8 @@ export default function LeadershipTalentInsightsPage() {
                         <Badge className={riskBadgeClass(employee.riskFlag)}>Risk {employee.riskFlag}</Badge>
                       </div>
                       <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                        <span>Rating {employee.rating.toFixed(2)}</span>
-                        <span>Progress {employee.progress.toFixed(1)}%</span>
+                        <span>Rating {fixed(employee.rating, 2)}</span>
+                        <span>Progress {fixed(employee.progress, 1)}%</span>
                       </div>
                       <Progress value={employee.progress} className="mt-2 h-2.5" />
                     </div>
@@ -116,8 +132,8 @@ export default function LeadershipTalentInsightsPage() {
                         <Badge className={riskBadgeClass(employee.riskFlag)}>Risk {employee.riskFlag}</Badge>
                       </div>
                       <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                        <span>Rating {employee.rating.toFixed(2)}</span>
-                        <span>Progress {employee.progress.toFixed(1)}%</span>
+                        <span>Rating {fixed(employee.rating, 2)}</span>
+                        <span>Progress {fixed(employee.progress, 1)}%</span>
                       </div>
                       <Progress value={employee.progress} className="mt-2 h-2.5" />
                     </div>
@@ -135,16 +151,16 @@ export default function LeadershipTalentInsightsPage() {
               <CardDescription>Rating bands to monitor bench strength and quality spread.</CardDescription>
               <div className="mt-4 h-72 rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.02)] p-4 shadow-[0_12px_34px_rgba(0,0,0,0.24)]">
                 {talentDistribution.some((entry) => entry.count > 0) ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={talentDistribution} dataKey="count" nameKey="band" innerRadius={45} outerRadius={92} paddingAngle={3}>
-                        {talentDistribution.map((entry, index) => (
-                          <Cell key={`${entry.band}-${index}`} fill={TALENT_COLORS[index % TALENT_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#E5E7EB", fontWeight: 600, marginBottom: 4 }} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                  <LazyPieChart
+                    data={talentDistribution.map((entry) => ({
+                      name: entry.band,
+                      value: entry.count,
+                    }))}
+                    innerRadius={45}
+                    outerRadius={92}
+                    colors={TALENT_COLORS}
+                    tooltipStyle={chartTooltipStyle}
+                  />
                 ) : (
                   <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{emptyMessage}</div>
                 )}
@@ -177,7 +193,7 @@ export default function LeadershipTalentInsightsPage() {
 
           <Card className="rounded-2xl border border-border/75 bg-card/95">
             <CardTitle>Training Need Insights</CardTitle>
-            <CardDescription>Heatmap-linked training demand by severity band.</CardDescription>
+            <CardDescription>Heatmap-linked training demand by severity band. Most needed training type: {mostNeededTrainingType}.</CardDescription>
             <div className="mt-4">
               <MetricChart
                 kind="bar"

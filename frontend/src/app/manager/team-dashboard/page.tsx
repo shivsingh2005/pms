@@ -6,13 +6,14 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/page-header";
-import { Card, CardDescription, CardTitle } from "@/components/ui/card";
+import { Card, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { useSessionStore } from "@/store/useSessionStore";
 import { managerService } from "@/services/manager";
+import { fixed, n } from "@/lib/safe";
 import type { ManagerTeamMember } from "@/types";
 
 type SortKey = "performance" | "name";
@@ -128,63 +129,81 @@ export default function ManagerTeamDashboardPage() {
       {loading && <Card className="rounded-xl border bg-card p-5"><CardDescription>Loading team members...</CardDescription></Card>}
 
       {!loading && (
-        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredMembers.map((member) => (
-            <button
-              key={member.id}
-              className="text-left"
-              onClick={() => router.push(`/manager/employee/${member.id}`)}
-              type="button"
-            >
-              <Card className="rounded-xl border bg-card p-5 space-y-4 hover:border-primary/40 hover:shadow-soft">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    {member.profile_avatar ? (
-                      <Image
-                        src={member.profile_avatar}
-                        alt={member.name}
-                        width={44}
-                        height={44}
-                        className="h-11 w-11 rounded-full object-cover border border-border/70"
-                      />
-                    ) : (
-                      <div className="h-11 w-11 rounded-full border border-border/70 bg-muted/60 grid place-items-center text-sm font-semibold text-muted-foreground">
-                        {initials(member.name)}
-                      </div>
-                    )}
-                    <div>
-                      <CardTitle className="text-base">{member.name}</CardTitle>
-                      <CardDescription>{member.role}</CardDescription>
-                      <CardDescription>{member.department}</CardDescription>
-                    </div>
-                  </div>
-                  <Badge className={member.status === "On Track" ? "bg-success/15 text-success ring-success/25" : "bg-error/15 text-error ring-error/25"}>
-                    {member.status}
-                  </Badge>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Goal Progress</span>
-                    <span className="font-semibold">{member.goal_progress_percent}%</span>
-                  </div>
-                  <Progress value={member.goal_progress_percent} />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground">
-                  <div className="rounded-md border border-border/60 bg-background/40 px-2 py-1.5">
-                    <p>Final Rating</p>
-                    <p className="text-sm font-semibold text-foreground">{(member.avg_final_rating ?? 0).toFixed(2)}</p>
-                  </div>
-                  <div className="rounded-md border border-border/60 bg-background/40 px-2 py-1.5">
-                    <p>Consistency</p>
-                    <p className="text-sm font-semibold text-foreground">{(member.consistency_percent ?? 0).toFixed(1)}%</p>
-                  </div>
-                </div>
-              </Card>
-            </button>
-          ))}
-        </section>
+        <Card className="rounded-xl border bg-card p-0 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-sm">
+              <thead className="bg-muted/40">
+                <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="px-4 py-3 font-medium">Employee</th>
+                  <th className="px-4 py-3 font-medium">Role</th>
+                  <th className="px-4 py-3 font-medium">Department</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Goal Progress</th>
+                  <th className="px-4 py-3 font-medium">Final Rating</th>
+                  <th className="px-4 py-3 font-medium">Consistency</th>
+                  <th className="px-4 py-3 font-medium text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredMembers.map((member) => {
+                  const profileId = member.id || (member as { employee_id?: string }).employee_id || "";
+                  return (
+                    <tr key={member.id} className="border-t border-border/60 align-middle hover:bg-muted/20">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          {member.profile_avatar ? (
+                            <Image
+                              src={member.profile_avatar}
+                              alt={member.name}
+                              width={36}
+                              height={36}
+                              className="h-9 w-9 rounded-full border border-border/70 object-cover"
+                            />
+                          ) : (
+                            <div className="grid h-9 w-9 place-items-center rounded-full border border-border/70 bg-muted/60 text-xs font-semibold text-muted-foreground">
+                              {initials(member.name)}
+                            </div>
+                          )}
+                          <div>
+                            <p className="font-medium text-foreground">{member.name}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">{member.role}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{member.department}</td>
+                      <td className="px-4 py-3">
+                        <Badge className={member.status === "On Track" ? "bg-success/15 text-success ring-success/25" : "bg-error/15 text-error ring-error/25"}>
+                          {member.status}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="space-y-1.5">
+                          <p className="text-xs text-muted-foreground">{member.goal_progress_percent}%</p>
+                          <Progress value={member.goal_progress_percent} className="h-2" />
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-foreground">{fixed(n(member.avg_final_rating, 0), 2)}</td>
+                      <td className="px-4 py-3 font-medium text-foreground">{fixed(n(member.consistency_percent, 0), 1)}%</td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!profileId}
+                          onClick={() => {
+                            if (!profileId) return;
+                            router.push(`/manager/employee/${profileId}`);
+                          }}
+                        >
+                          Open Profile
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
       {!loading && filteredMembers.length === 0 && (

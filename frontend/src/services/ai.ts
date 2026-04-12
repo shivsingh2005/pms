@@ -1,6 +1,10 @@
 import { api } from "@/services/api";
 import type {
+  AIEmployeeRecommendRequest,
+  AIEmployeeRecommendResponse,
   AIFeedbackCoachingResult,
+  AIGoalClusterDetectRequest,
+  AIGoalClusterDetectResponse,
   AIGrowthSuggestionResult,
   AIGoalGenerationResponse,
   AIQuarterlyUsage,
@@ -71,6 +75,14 @@ export const aiService = {
   },
   async suggestEmployeeSplit(payload: EmployeeCascadeSuggestionRequest) {
     const { data } = await api.post<EmployeeCascadeSuggestionResponse>("/ai/goal-cascade/suggest-employee-split", payload);
+    return data;
+  },
+  async detectGoalCluster(payload: AIGoalClusterDetectRequest) {
+    const { data } = await api.post<AIGoalClusterDetectResponse>("/ai/goals/detect-cluster", payload);
+    return data;
+  },
+  async recommendEmployeesForGoal(payload: AIEmployeeRecommendRequest) {
+    const { data } = await api.post<AIEmployeeRecommendResponse>("/ai/goals/recommend-employees", payload);
     return data;
   },
 };

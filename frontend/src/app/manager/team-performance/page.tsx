@@ -86,7 +86,7 @@ export default function ManagerTeamPerformancePage() {
     setLoading(true);
     loadTeamPerformance()
       .then((response) => {
-        console.log("team-performance-response", response);
+        console.warn("team-performance-response", response);
         setPayload(response);
       })
       .catch(() => toast.error("Failed to load team performance analytics"))

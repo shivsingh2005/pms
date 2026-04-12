@@ -12,7 +12,7 @@ import {
   Trophy,
   TrendingDown,
 } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "@/components/charts/recharts-lazy";
+import { LazyPieChart } from "@/components/charts";
 
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -383,16 +383,7 @@ export default function HRManagerTeamViewPage() {
                 <CardTitle className="text-white">Rating Distribution</CardTitle>
                 <CardDescription className="text-slate-400">Bucketed as 1-2, 3, and 4-5 ratings</CardDescription>
                 <div className="mt-4 h-56">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={donutData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={86} paddingAngle={3}>
-                        {donutData.map((entry) => (
-                          <Cell key={entry.name} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip contentStyle={chartTooltipStyle} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                  <LazyPieChart data={donutData} innerRadius={55} outerRadius={86} tooltipStyle={chartTooltipStyle} />
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                   {donutData.map((entry) => (

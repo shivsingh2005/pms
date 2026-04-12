@@ -96,6 +96,7 @@ api.interceptors.response.use(
     );
 
     const originalRequest = error?.config;
+    const isAuthEndpoint = /\/auth\/(me|refresh|login|logout|google|onboarding)/i.test(requestUrl);
 
     if (status === 401 && !originalRequest?._retry) {
       originalRequest._retry = true;
@@ -119,9 +120,10 @@ api.interceptors.response.use(
     if (status === 401) {
       authCookies.clearToken();
       authCookies.clearRefreshToken();
-      if (typeof window !== "undefined") {
+      if (typeof window !== "undefined" && !isAuthEndpoint) {
         window.location.href = "/";
       }
+      return Promise.reject(error);
     }
 
     if (skipErrorToast) {

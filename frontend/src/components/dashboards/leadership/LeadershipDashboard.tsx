@@ -1,0 +1,1 @@
+export { LeadershipDashboard as default } from "@/components/dashboard/LeadershipDashboard";

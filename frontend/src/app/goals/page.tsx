@@ -1,11 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { FieldErrors, useForm } from "react-hook-form";
-import { z } from "zod";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { motion } from "framer-motion";
-import { Sparkles, Target, X } from "lucide-react";
+import dynamic from "next/dynamic";
+import { useEffect, useMemo, useState } from "react";
+import { Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
@@ -13,16 +10,16 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/ui/page-header";
 import { Progress } from "@/components/ui/progress";
-import { GoalCard } from "@/components/goals/GoalCard";
-import { GoalTimeline } from "@/components/goals/GoalTimeline";
 import { SectionContainer } from "@/components/layout/SectionContainer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { aiService } from "@/services/ai";
 import { goalsService } from "@/services/goals";
 import { leadershipGoalsService } from "@/services/leadership-goals";
 import { managerService } from "@/services/manager";
+import { performanceCyclesService } from "@/services/performance-cycles";
 import { useGoalsStore } from "@/store/useGoalsStore";
 import { useSessionStore } from "@/store/useSessionStore";
+import type { CreateGoalInput } from "@/components/goals/GoalCreationPanel";
 import type {
   AIGeneratedGoal,
   CascadedEmployeeGoal,
@@ -31,9 +28,34 @@ import type {
   GoalLineageImpact,
   ManagerPendingGoal,
   ManagerTeamMember,
+  PerformanceCycleRecord,
   SelfGoalSummary,
 } from "@/types";
 import { toast } from "sonner";
+
+const LazyGoalCreationPanel = dynamic(
+  () => import("@/components/goals/GoalCreationPanel").then((module) => module.GoalCreationPanel),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-[560px] rounded-2xl xl:col-span-4" />,
+  }
+);
+
+const LazyGoalTimeline = dynamic(
+  () => import("@/components/goals/GoalTimeline").then((module) => module.GoalTimeline),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-[220px] rounded-xl" />,
+  }
+);
+
+const LazyGoalCard = dynamic(
+  () => import("@/components/goals/GoalCard").then((module) => module.GoalCard),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-48 rounded-xl" />,
+  }
+);
 
 function extractErrorMessage(error: unknown): string {
   if (error && typeof error === "object") {
@@ -56,16 +78,6 @@ function extractErrorMessage(error: unknown): string {
   return "Unable to create goal";
 }
 
-const schema = z.object({
-  title: z.string().trim().min(3, "Title must be at least 3 characters"),
-  description: z.string().optional(),
-  weightage: z.number().min(1, "Weightage must be at least 1").max(100, "Weightage cannot exceed 100"),
-  progress: z.number().min(0, "Progress cannot be negative").max(100, "Progress cannot exceed 100"),
-  framework: z.enum(["OKR", "MBO", "Hybrid"]),
-});
-
-type FormValues = z.infer<typeof schema>;
-
 export default function GoalsPage() {
   const { goals, loading, fetchGoals, addGoal, submitGoal, requestApproval, withdrawGoal } = useGoalsStore();
   const user = useSessionStore((s) => s.user);
@@ -87,15 +99,33 @@ export default function GoalsPage() {
   const [selfGoalSummary, setSelfGoalSummary] = useState<SelfGoalSummary | null>(null);
   const [managerPendingGoals, setManagerPendingGoals] = useState<ManagerPendingGoal[]>([]);
   const [managerComments, setManagerComments] = useState<Record<string, string>>({});
+  const [cycleStatusById, setCycleStatusById] = useState<Record<string, string>>({});
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { title: "", description: "", weightage: 25, progress: 0, framework: "OKR" },
-  });
 
   useEffect(() => {
     fetchGoals().catch(() => null);
   }, [fetchGoals]);
+
+  useEffect(() => {
+    if (!user) {
+      setCycleStatusById({});
+      return;
+    }
+
+    performanceCyclesService
+      .listCycles()
+      .then((payload) => {
+        const next: Record<string, string> = {};
+        for (const cycle of payload.cycles || []) {
+          const typedCycle = cycle as PerformanceCycleRecord;
+          if (typedCycle.id) {
+            next[typedCycle.id] = String(typedCycle.status || "").toLowerCase();
+          }
+        }
+        setCycleStatusById(next);
+      })
+      .catch(() => null);
+  }, [user]);
 
   useEffect(() => {
     if (!user) {
@@ -133,7 +163,7 @@ export default function GoalsPage() {
     }
   }, [user, isManagerMode, isEmployee]);
 
-  const onSubmit = async (values: FormValues) => {
+  const createGoal = async (values: CreateGoalInput) => {
     try {
       if (isEmployee) {
         await goalsService.selfCreateGoal({
@@ -148,17 +178,11 @@ export default function GoalsPage() {
         await addGoal(values);
       }
       toast.success("Goal created");
-      form.reset({ title: "", description: "", weightage: 25, progress: 0, framework: "OKR" });
       setShowCreateForm(false);
     } catch (error: unknown) {
       toast.error(extractErrorMessage(error));
+      throw error;
     }
-  };
-
-  const onInvalid = (errors: FieldErrors<FormValues>) => {
-    const firstError = Object.values(errors)[0];
-    const message = firstError?.message;
-    toast.error(typeof message === "string" ? message : "Please fix form validation errors before creating the goal");
   };
 
   const generateAIGoals = async () => {
@@ -340,6 +364,10 @@ export default function GoalsPage() {
 
   const handleManagerDecision = async (goalId: string, action: "approve" | "request-edit" | "reject") => {
     const comment = managerComments[goalId]?.trim();
+    if (action === "reject" && !comment) {
+      toast.error("Rejection reason is required");
+      return;
+    }
     try {
       if (action === "approve") {
         await goalsService.managerApproveGoal(goalId, comment);
@@ -359,8 +387,27 @@ export default function GoalsPage() {
     }
   };
 
+  const [activeGoals, historyGoals] = useMemo(() => {
+    const active: typeof goals = [];
+    const history: typeof goals = [];
+
+    for (const goal of goals) {
+      const cycleStatus = goal.cycle_id ? cycleStatusById[String(goal.cycle_id)] : undefined;
+      const isCycleClosed = cycleStatus === "closed" || cycleStatus === "locked";
+      const isTerminalGoal = goal.status === "rejected" || goal.status === "withdrawn";
+
+      if (isCycleClosed || isTerminalGoal) {
+        history.push(goal);
+      } else {
+        active.push(goal);
+      }
+    }
+
+    return [active, history];
+  }, [goals, cycleStatusById]);
+
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-7">
+    <div className="space-y-7">
       <PageHeader
         title={isManagerMode ? "Team Goals" : "My Goals"}
         description={
@@ -446,77 +493,13 @@ export default function GoalsPage() {
           </Card>
         ) : null}
 
-        {canCreateGoals && showCreateForm && (
-        <Card id="create-goal-form" className="space-y-4 rounded-2xl border border-border/75 bg-card/95 xl:col-span-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-              <Target className="h-3.5 w-3.5" /> Goal Planning
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowCreateForm(false)}
-              className="rounded-lg p-1.5 hover:bg-secondary/60 transition-colors"
-              aria-label="Close form"
-            >
-              <X className="h-5 w-5 text-muted-foreground" />
-            </button>
-          </div>
-          <CardTitle>Create Goal</CardTitle>
-          <CardDescription>Define measurable outcomes and assign framework, progress, and weightage.</CardDescription>
-          <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Goal Title</label>
-              <Input placeholder="Improve release quality" {...form.register("title")} />
-              {form.formState.errors.title && (
-                <p className="text-xs text-destructive">{form.formState.errors.title.message}</p>
-              )}
-            </div>
+        {canCreateGoals && showCreateForm ? (
+          <LazyGoalCreationPanel onSubmitGoal={createGoal} onClose={() => setShowCreateForm(false)} />
+        ) : null}
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Description</label>
-              <Textarea placeholder="Define scope and success criteria" {...form.register("description")} />
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Weightage (%)</label>
-                <Input type="number" placeholder="25" {...form.register("weightage", { valueAsNumber: true })} />
-                {form.formState.errors.weightage && (
-                  <p className="text-xs text-destructive">{form.formState.errors.weightage.message}</p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Progress (%)</label>
-                <Input type="number" placeholder="0" {...form.register("progress", { valueAsNumber: true })} />
-                {form.formState.errors.progress && (
-                  <p className="text-xs text-destructive">{form.formState.errors.progress.message}</p>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Framework</label>
-              <select
-                className="h-10 w-full rounded-lg border border-input bg-card px-3 text-sm text-foreground focus:border-primary/55 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                {...form.register("framework")}
-              >
-                <option value="OKR">OKR</option>
-                <option value="MBO">MBO</option>
-                <option value="Hybrid">Hybrid</option>
-              </select>
-              {form.formState.errors.framework && (
-                <p className="text-xs text-destructive">{form.formState.errors.framework.message}</p>
-              )}
-            </div>
-
-            <Button type="submit" className="w-full">Create Goal</Button>
-          </form>
-        </Card>
-        )}
-
-        <div className={`space-y-6 ${isManagerMode ? "xl:col-span-12" : "xl:col-span-8"}`}>
+        <div className={`space-y-6 ${canCreateGoals && showCreateForm ? "xl:col-span-8" : "xl:col-span-12"}`}>
           <Card className="rounded-2xl border border-border/75 bg-card/95">
-            <CardTitle>{isManagerMode ? `Team Goals (${goals.length})` : `My Goals (${goals.length})`}</CardTitle>
+            <CardTitle>{isManagerMode ? `Team Goals (${activeGoals.length})` : `My Goals (${activeGoals.length})`}</CardTitle>
             <CardDescription>
               {isManagerMode
                 ? "Direct-report and manager goals are shown for team review and approvals."
@@ -686,10 +669,10 @@ export default function GoalsPage() {
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             {loading
               ? Array.from({ length: 4 }).map((_, idx) => <Skeleton key={idx} className="h-48" />)
-              : goals.length === 0
+              : activeGoals.length === 0
                 ? <Card className="md:col-span-2"><CardDescription>No goals yet. Create one to see it here.</CardDescription></Card>
-              : goals.map((goal) => (
-                  <GoalCard
+              : activeGoals.map((goal) => (
+                  <LazyGoalCard
                     key={goal.id}
                     goal={goal}
                     onSubmit={(id) => submitGoal(id).then(() => toast.success("Goal submitted"))}
@@ -699,15 +682,35 @@ export default function GoalsPage() {
                 ))}
           </div>
 
+          <Card className="space-y-4 rounded-2xl border border-border/75 bg-card/95">
+            <CardTitle>Goal History</CardTitle>
+            <CardDescription>
+              Goals from closed or locked cycles, and rejected or withdrawn goals, appear here.
+            </CardDescription>
+            {historyGoals.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No historical goals yet.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                {historyGoals.map((goal) => (
+                  <LazyGoalCard
+                    key={goal.id}
+                    goal={goal}
+                    onSubmit={() => {}}
+                  />
+                ))}
+              </div>
+            )}
+          </Card>
+
           <Card className="rounded-2xl border border-border/75 bg-card/95">
             <CardTitle>Goal Timeline</CardTitle>
             <div className="mt-4">
-              <GoalTimeline />
+              <LazyGoalTimeline />
             </div>
           </Card>
         </div>
       </SectionContainer>
-    </motion.div>
+    </div>
   );
 }
 

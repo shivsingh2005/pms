@@ -1,15 +1,16 @@
-import logging
+from __future__ import annotations
 
-from sqlalchemy import case, func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import HTTPException, status
+from collections import defaultdict
+from typing import Literal
 from uuid import UUID
+
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.checkin import Checkin
-from app.models.checkin_rating import CheckinRating
 from app.models.employee import Employee
-from app.models.enums import CheckinStatus, GoalStatus, UserRole
+from app.models.enums import CheckinStatus, GoalStatus, RatingLabel, UserRole
 from app.models.goal import Goal
-from app.models.meeting import Meeting
 from app.models.performance_review import PerformanceReview
 from app.models.rating import Rating
 from app.models.user import User
@@ -17,46 +18,50 @@ from app.services.manager_seed_service import ManagerSeedService
 
 
 class ManagerService:
-    logger = logging.getLogger(__name__)
+    @staticmethod
+    def _split_insight_text(value: str | None) -> list[str]:
+        if not value:
+            return []
+        parts = [part.strip() for part in value.replace("\n", ",").split(",")]
+        return [part for part in parts if part]
 
     @staticmethod
     async def _team_count(current_user: User, db: AsyncSession) -> int:
-        team_count_stmt = select(func.count(User.id)).where(
-            User.manager_id == current_user.id,
-            User.organization_id == current_user.organization_id,
-            User.is_active.is_(True),
-            User.role == UserRole.employee,
+        result = await db.execute(
+            select(func.count(User.id)).where(
+                User.manager_id == current_user.id,
+                User.organization_id == current_user.organization_id,
+                User.is_active.is_(True),
+                User.role == UserRole.employee,
+            )
         )
-        team_count_result = await db.execute(team_count_stmt)
-        return int(team_count_result.scalar() or 0)
+        return int(result.scalar() or 0)
 
     @staticmethod
     async def _repair_manager_relationships(current_user: User, db: AsyncSession) -> int:
         repaired = 0
 
-        # Bring User.manager_id back in sync when employee mirror rows already point to this manager.
-        mirrored_employee_ids_result = await db.execute(
-            select(Employee.id).where(
-                Employee.manager_id == current_user.id,
-                Employee.is_active.is_(True),
+        # Keep mirrored employee records aligned with direct-report user rows.
+        direct_report_ids_result = await db.execute(
+            select(User.id).where(
+                User.manager_id == current_user.id,
+                User.organization_id == current_user.organization_id,
+                User.is_active.is_(True),
+                User.role == UserRole.employee,
             )
         )
-        mirrored_employee_ids = list(mirrored_employee_ids_result.scalars().all())
-        if mirrored_employee_ids:
-            sync_users_result = await db.execute(
-                update(User)
+        direct_report_ids = list(direct_report_ids_result.scalars().all())
+        if direct_report_ids:
+            sync_mirror_result = await db.execute(
+                update(Employee)
                 .where(
-                    User.id.in_(mirrored_employee_ids),
-                    User.organization_id == current_user.organization_id,
-                    User.is_active.is_(True),
-                    User.role == UserRole.employee,
-                    User.manager_id.is_distinct_from(current_user.id),
+                    Employee.id.in_(direct_report_ids),
+                    Employee.manager_id != current_user.id,
                 )
                 .values(manager_id=current_user.id)
             )
-            repaired += int(sync_users_result.rowcount or 0)
+            repaired += int(sync_mirror_result.rowcount or 0)
 
-        # If this manager still has no team, adopt orphan employees in the same organization.
         if await ManagerService._team_count(current_user, db) == 0:
             adopt_users_result = await db.execute(
                 update(User)
@@ -68,27 +73,29 @@ class ManagerService:
                 )
                 .values(manager_id=current_user.id)
             )
-            repaired += int(adopt_users_result.rowcount or 0)
+            adopted_count = int(adopt_users_result.rowcount or 0)
+            repaired += adopted_count
 
-            adopted_user_ids_result = await db.execute(
-                select(User.id).where(
-                    User.organization_id == current_user.organization_id,
-                    User.is_active.is_(True),
-                    User.role == UserRole.employee,
-                    User.manager_id == current_user.id,
-                )
-            )
-            adopted_user_ids = list(adopted_user_ids_result.scalars().all())
-            if adopted_user_ids:
-                sync_employee_rows_result = await db.execute(
-                    update(Employee)
-                    .where(
-                        Employee.id.in_(adopted_user_ids),
-                        Employee.manager_id.is_(None),
+            if adopted_count > 0:
+                adopted_ids_result = await db.execute(
+                    select(User.id).where(
+                        User.manager_id == current_user.id,
+                        User.organization_id == current_user.organization_id,
+                        User.is_active.is_(True),
+                        User.role == UserRole.employee,
                     )
-                    .values(manager_id=current_user.id)
                 )
-                repaired += int(sync_employee_rows_result.rowcount or 0)
+                adopted_ids = list(adopted_ids_result.scalars().all())
+                if adopted_ids:
+                    sync_adopted_result = await db.execute(
+                        update(Employee)
+                        .where(
+                            Employee.id.in_(adopted_ids),
+                            Employee.manager_id.is_(None),
+                        )
+                        .values(manager_id=current_user.id)
+                    )
+                    repaired += int(sync_adopted_result.rowcount or 0)
 
         return repaired
 
@@ -97,47 +104,9 @@ class ManagerService:
         repaired_count = await ManagerService._repair_manager_relationships(current_user, db)
         if repaired_count > 0:
             await db.commit()
-            ManagerService.logger.info(
-                "Manager relationship repair executed",
-                extra={"manager_id": str(current_user.id), "repaired_records": repaired_count},
-            )
 
         team_count = await ManagerService._team_count(current_user, db)
         if team_count > 0:
-            team_ids_subquery = select(User.id).where(
-                User.manager_id == current_user.id,
-                User.organization_id == current_user.organization_id,
-                User.is_active.is_(True),
-            )
-
-            goal_count_result = await db.execute(select(func.count(Goal.id)).where(Goal.user_id.in_(team_ids_subquery)))
-            checkin_count_result = await db.execute(select(func.count(Checkin.id)).where(Checkin.employee_id.in_(team_ids_subquery)))
-            rating_count_result = await db.execute(select(func.count(Rating.id)).where(Rating.employee_id.in_(team_ids_subquery)))
-            checkin_rating_count_result = await db.execute(
-                select(func.count(CheckinRating.id)).where(CheckinRating.employee_id.in_(team_ids_subquery))
-            )
-            meeting_count_result = await db.execute(select(func.count(Meeting.id)).where(Meeting.employee_id.in_(team_ids_subquery)))
-
-            goal_count = int(goal_count_result.scalar() or 0)
-            checkin_count = int(checkin_count_result.scalar() or 0)
-            rating_count = int(rating_count_result.scalar() or 0)
-            checkin_rating_count = int(checkin_rating_count_result.scalar() or 0)
-            meeting_count = int(meeting_count_result.scalar() or 0)
-
-            if min(goal_count, checkin_count, rating_count, checkin_rating_count, meeting_count) == 0:
-                seeded = await ManagerSeedService.seed_activity_for_existing_team(current_user, db)
-                ManagerService.logger.info(
-                    "Manager dashboard team activity auto-seeded",
-                    extra={
-                        "manager_id": str(current_user.id),
-                        "seeded_records": seeded,
-                        "goal_count": goal_count,
-                        "checkin_count": checkin_count,
-                        "rating_count": rating_count,
-                        "checkin_rating_count": checkin_rating_count,
-                        "meeting_count": meeting_count,
-                    },
-                )
             return
 
         employee_count_result = await db.execute(
@@ -148,483 +117,251 @@ class ManagerService:
             )
         )
         employee_count = int(employee_count_result.scalar() or 0)
+        target_team_size = min(10, employee_count) if employee_count > 0 else 10
 
-        created = await ManagerSeedService.seed_manager_data(current_user, db, team_size=10)
-        ManagerService.logger.info(
-            "Manager dashboard auto-seed executed",
-            extra={
-                "manager_id": str(current_user.id),
-                "created_team_members": created,
-                "organization_employee_count": employee_count,
-            },
-        )
+        await ManagerSeedService.seed_manager_data(current_user, db, team_size=target_team_size)
 
     @staticmethod
-    async def get_team_performance(current_user: User, db: AsyncSession) -> dict:
+    async def _fetch_team_members(current_user: User, db: AsyncSession) -> list[User]:
         await ManagerService._ensure_team_data(current_user, db)
 
-        team_members_subquery = (
-            select(User.id)
-            .where(
+        users_result = await db.execute(
+            select(User).where(
                 User.manager_id == current_user.id,
+                User.organization_id == current_user.organization_id,
                 User.is_active.is_(True),
+                User.role == UserRole.employee,
             )
-            .subquery()
         )
+        return list(users_result.scalars().all())
 
-        team_result = await db.execute(
-            select(User.id, User.name)
-            .where(User.id.in_(select(team_members_subquery.c.id)))
-            .order_by(User.name.asc())
-        )
-        team_members = team_result.all()
-        team_ids = [row[0] for row in team_members]
-        team_name_map = {str(row[0]): row[1] for row in team_members}
-
-        ManagerService.logger.info(
-            "Manager dashboard team fetched",
-            extra={"manager_id": str(current_user.id), "team_size": len(team_ids)},
-        )
-
-        if not team_ids:
+    @staticmethod
+    async def _team_metrics(member_ids: list, db: AsyncSession) -> dict:
+        if not member_ids:
             return {
-                "team_size": 0,
-                "avg_performance": 0.0,
-                "avg_progress": 0.0,
-                "completed_goals": 0,
-                "consistency": 0.0,
-                "at_risk": 0,
-                "message": "No team assigned",
+                "goals": {},
+                "checkins": {},
+                "ratings": {},
                 "trend": [],
-                "distribution": [
-                    {"label": "EE", "count": 0},
-                    {"label": "DE", "count": 0},
-                    {"label": "ME", "count": 0},
-                    {"label": "SME", "count": 0},
-                    {"label": "NI", "count": 0},
-                ],
-                "workload": [],
-                "performers": {"top": [], "low": []},
-                "top_performers": [],
-                "low_performers": [],
-                "team": [],
-                "insights": ["No direct reports found for this manager."],
+                "distribution": [],
             }
 
-        avg_performance_result = await db.execute(
-            select(func.coalesce(func.avg(CheckinRating.rating), 0.0)).where(
-                CheckinRating.employee_id.in_(select(team_members_subquery.c.id))
-            )
-        )
-        avg_performance = round(float(avg_performance_result.scalar() or 0.0), 2)
-
-        goals_agg_result = await db.execute(
-            select(
-                func.coalesce(func.avg(Goal.progress), 0.0),
-                func.coalesce(func.sum(case((Goal.progress >= 100, 1), else_=0)), 0),
-            )
-            .where(
-                Goal.user_id.in_(select(team_members_subquery.c.id)),
-                Goal.status != GoalStatus.rejected,
-            )
-        )
-        avg_progress_raw, completed_goals_raw = goals_agg_result.one()
-        avg_progress = round(float(avg_progress_raw or 0.0), 1)
-        completed_goals = int(completed_goals_raw or 0)
-
-        expected_checkins = max(len(team_ids) * 6, 1)
-        total_checkins_result = await db.execute(
-            select(func.count(Checkin.id)).where(
-                Checkin.employee_id.in_(select(team_members_subquery.c.id)),
-                Checkin.status.in_([CheckinStatus.submitted, CheckinStatus.reviewed]),
-            )
-        )
-        total_checkins = int(total_checkins_result.scalar() or 0)
-        consistency = round(min((total_checkins / expected_checkins) * 100.0, 100.0), 1)
-
-        per_employee_progress_result = await db.execute(
+        goals_result = await db.execute(
             select(
                 Goal.user_id,
-                func.coalesce(func.avg(Goal.progress), 0.0).label("avg_progress"),
+                func.count(Goal.id),
+                func.coalesce(func.avg(Goal.progress), 0.0),
+                func.coalesce(func.sum(Goal.weightage), 0.0),
+                func.count(Goal.id).filter(Goal.progress >= 100),
             )
             .where(
-                Goal.user_id.in_(select(team_members_subquery.c.id)),
+                Goal.user_id.in_(member_ids),
                 Goal.status != GoalStatus.rejected,
             )
             .group_by(Goal.user_id)
         )
-        per_employee_progress = [
-            {
-                "employee_id": str(row[0]),
-                "employee_name": team_name_map.get(str(row[0]), "Unknown"),
-                "progress": round(float(row[1] or 0.0), 1),
-            }
-            for row in per_employee_progress_result.all()
-        ]
 
-        per_employee_rating_result = await db.execute(
-            select(
-                CheckinRating.employee_id,
-                func.coalesce(func.avg(CheckinRating.rating), 0.0).label("avg_rating"),
-            )
-            .where(CheckinRating.employee_id.in_(select(team_members_subquery.c.id)))
-            .group_by(CheckinRating.employee_id)
-        )
-        per_employee_rating_map = {
-            str(row[0]): round(float(row[1] or 0.0), 2)
-            for row in per_employee_rating_result.all()
-        }
-
-        checkin_consistency_result = await db.execute(
+        checkins_result = await db.execute(
             select(
                 Checkin.employee_id,
-                func.count(Checkin.id).label("total"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (Checkin.status.in_([CheckinStatus.submitted, CheckinStatus.reviewed]), 1),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("completed"),
+                func.count(Checkin.id),
+                func.count(Checkin.id).filter(Checkin.status.in_([CheckinStatus.submitted, CheckinStatus.reviewed])),
+                func.max(Checkin.created_at),
             )
-            .where(Checkin.employee_id.in_(select(team_members_subquery.c.id)))
+            .where(Checkin.employee_id.in_(member_ids))
             .group_by(Checkin.employee_id)
         )
-        per_employee_consistency_map: dict[str, float] = {}
-        for employee_id, total, completed in checkin_consistency_result.all():
-            total_count = int(total or 0)
-            completed_count = int(completed or 0)
-            per_employee_consistency_map[str(employee_id)] = (
-                round((completed_count / total_count) * 100.0, 1) if total_count else 0.0
-            )
 
-        progress_map = {row["employee_id"]: row["progress"] for row in per_employee_progress}
-        team_snapshot = [
-            {
-                "employee_id": employee_id,
-                "employee_name": team_name_map.get(employee_id, "Unknown"),
-                "progress": progress_map.get(employee_id, 0.0),
-                "rating": per_employee_rating_map.get(employee_id, 0.0),
-                "consistency": per_employee_consistency_map.get(employee_id, 0.0),
-            }
-            for employee_id in [str(team_id) for team_id in team_ids]
-        ]
-
-        at_risk = sum(1 for row in team_snapshot if row["progress"] < 50 or row["rating"] <= 2)
-
-        week_bucket = func.date_trunc("week", Goal.created_at).label("week_bucket")
-        trend_result = await db.execute(
-            select(
-                func.to_char(week_bucket, "IYYY-IW").label("week"),
-                func.coalesce(func.avg(Goal.progress), 0.0).label("progress"),
-            )
-            .where(
-                Goal.user_id.in_(select(team_members_subquery.c.id)),
-                Goal.status != GoalStatus.rejected,
-            )
-            .group_by(week_bucket)
-            .order_by(week_bucket.asc())
-        )
-        trend_rows = trend_result.all()
-        trend = [
-            {
-                "week": row[0],
-                "progress": round(float(row[1] or 0.0), 1),
-            }
-            for row in trend_rows[-8:]
-        ]
-
-        latest_rating_subquery = (
+        ratings_result = await db.execute(
             select(
                 Rating.employee_id,
-                func.max(Rating.created_at).label("latest_created_at"),
+                func.coalesce(func.avg(Rating.rating), 0.0),
             )
-            .where(Rating.employee_id.in_(select(team_members_subquery.c.id)))
+            .where(Rating.employee_id.in_(member_ids))
             .group_by(Rating.employee_id)
-            .subquery()
         )
 
-        latest_rating_result = await db.execute(
-            select(Rating.rating_label, func.count(Rating.id))
-            .join(
-                latest_rating_subquery,
-                (Rating.employee_id == latest_rating_subquery.c.employee_id)
-                & (Rating.created_at == latest_rating_subquery.c.latest_created_at),
+        week_start_expr = func.date_trunc("week", Checkin.created_at)
+        week_trend_result = await db.execute(
+            select(
+                week_start_expr,
+                func.coalesce(func.avg(Checkin.overall_progress), 0.0),
             )
+            .where(Checkin.employee_id.in_(member_ids))
+            .group_by(week_start_expr)
+            .order_by(week_start_expr.asc())
+        )
+
+        distribution_result = await db.execute(
+            select(Rating.rating_label, func.count(Rating.id))
+            .where(Rating.employee_id.in_(member_ids))
             .group_by(Rating.rating_label)
         )
-        label_counts = {str(row[0].value): int(row[1]) for row in latest_rating_result.all()}
-        distribution = [
-            {"label": "EE", "count": label_counts.get("EE", 0)},
-            {"label": "DE", "count": label_counts.get("DE", 0)},
-            {"label": "ME", "count": label_counts.get("ME", 0)},
-            {"label": "SME", "count": label_counts.get("SME", 0)},
-            {"label": "NI", "count": label_counts.get("NI", 0)},
-        ]
 
-        workload_result = await db.execute(
-            select(
-                Goal.user_id,
-                func.coalesce(func.sum(Goal.weightage), 0.0).label("total_weightage"),
-            )
-            .where(
-                Goal.user_id.in_(select(team_members_subquery.c.id)),
-                Goal.status != GoalStatus.rejected,
-            )
-            .group_by(Goal.user_id)
-        )
-        workload = [
-            {
-                "employee_id": str(row[0]),
-                "employee_name": team_name_map.get(str(row[0]), "Unknown"),
-                "total_weightage": round(float(row[1] or 0.0), 1),
+        goals_by_user = {}
+        for row in goals_result.all():
+            goals_by_user[row[0]] = {
+                "goal_count": int(row[1] or 0),
+                "avg_progress": float(row[2] or 0.0),
+                "workload": float(row[3] or 0.0),
+                "completed_goals": int(row[4] or 0),
             }
-            for row in workload_result.all()
+
+        checkins_by_user = {}
+        for row in checkins_result.all():
+            total = int(row[1] or 0)
+            done = int(row[2] or 0)
+            consistency = (float(done) / float(total) * 100.0) if total else 0.0
+            checkins_by_user[row[0]] = {
+                "total": total,
+                "done": done,
+                "consistency": consistency,
+                "last_checkin": row[3].isoformat() if row[3] else None,
+            }
+
+        ratings_by_user = {}
+        for row in ratings_result.all():
+            ratings_by_user[row[0]] = float(row[1] or 0.0)
+
+        trend = [
+            {
+                "week": row[0].date().isoformat() if row[0] is not None else "",
+                "progress": round(float(row[1] or 0.0), 1),
+            }
+            for row in week_trend_result.all()
         ]
-        workload = sorted(workload, key=lambda row: row["employee_name"])
 
-        top_performers = sorted(team_snapshot, key=lambda row: row["progress"], reverse=True)[:3]
-        low_performers = sorted(team_snapshot, key=lambda row: row["progress"])[:3]
+        label_to_count = defaultdict(int)
+        for label, count in distribution_result.all():
+            if label is None:
+                continue
+            label_to_count[str(label)] = int(count or 0)
 
-        insights: list[str] = [f"{at_risk} employees are at risk."]
-        if len(trend) >= 2:
-            delta = round(trend[-1]["progress"] - trend[0]["progress"], 1)
-            if delta >= 0:
-                insights.append(f"Team performance improved by {delta}% over the tracked period.")
-            else:
-                insights.append(f"Team performance declined by {abs(delta)}% over the tracked period.")
+        distribution = [
+            {"label": RatingLabel.EE.value, "count": label_to_count.get(RatingLabel.EE.value, 0)},
+            {"label": RatingLabel.DE.value, "count": label_to_count.get(RatingLabel.DE.value, 0)},
+            {"label": RatingLabel.ME.value, "count": label_to_count.get(RatingLabel.ME.value, 0)},
+            {"label": RatingLabel.SME.value, "count": label_to_count.get(RatingLabel.SME.value, 0)},
+            {"label": RatingLabel.NI.value, "count": label_to_count.get(RatingLabel.NI.value, 0)},
+        ]
 
         return {
-            "team_size": len(team_ids),
-            "avg_performance": avg_performance,
-            "avg_progress": avg_progress,
-            "completed_goals": completed_goals,
-            "consistency": consistency,
-            "at_risk": at_risk,
-            "message": None,
+            "goals": goals_by_user,
+            "checkins": checkins_by_user,
+            "ratings": ratings_by_user,
             "trend": trend,
             "distribution": distribution,
-            "workload": workload,
-            "performers": {
-                "top": top_performers,
-                "low": low_performers,
-            },
-            "top_performers": top_performers,
-            "low_performers": low_performers,
-            "team": team_snapshot,
-            "insights": insights,
         }
 
     @staticmethod
-    async def get_stack_ranking(
-        current_user: User,
-        db: AsyncSession,
-        *,
-        sort_by: str = "progress",
-        order: str = "desc",
-        at_risk_only: bool = False,
-        limit: int = 10,
-    ) -> dict:
-        payload = await ManagerService.get_team_performance(current_user, db)
-        rows = list(payload.get("team", []))
-
-        def risk_level(row: dict) -> str:
-            progress = float(row.get("progress", 0.0) or 0.0)
-            rating = float(row.get("rating", 0.0) or 0.0)
-            consistency = float(row.get("consistency", 0.0) or 0.0)
-            if progress < 40 or rating <= 2 or consistency < 50:
-                return "high"
-            if progress < 60 or rating <= 3 or consistency < 70:
-                return "medium"
-            return "low"
-
-        enriched: list[dict] = []
-        for row in rows:
-            enriched.append(
-                {
-                    "employee_id": row.get("employee_id"),
-                    "employee_name": row.get("employee_name", "Unknown"),
-                    "progress": round(float(row.get("progress", 0.0) or 0.0), 1),
-                    "rating": round(float(row.get("rating", 0.0) or 0.0), 2),
-                    "consistency": round(float(row.get("consistency", 0.0) or 0.0), 1),
-                    "risk_level": risk_level(row),
-                }
-            )
-
-        if at_risk_only:
-            enriched = [row for row in enriched if row["risk_level"] in {"high", "medium"}]
-
-        safe_sort_by = sort_by if sort_by in {"progress", "rating", "consistency"} else "progress"
-        reverse = order != "asc"
-        enriched.sort(key=lambda row: (row[safe_sort_by], row["progress"], row["rating"]), reverse=reverse)
-
-        trimmed = enriched[: max(1, min(limit, 100))]
-        items = [
-            {
-                "rank": idx,
-                **row,
-            }
-            for idx, row in enumerate(trimmed, start=1)
-        ]
+    def _member_payload(member: User, goals: dict, checkins: dict, ratings: dict) -> dict:
+        goal_row = goals.get(member.id, {})
+        checkin_row = checkins.get(member.id, {})
+        avg_progress = float(goal_row.get("avg_progress", 0.0))
+        consistency = float(checkin_row.get("consistency", 0.0))
 
         return {
-            "sort_by": safe_sort_by,
-            "order": "asc" if order == "asc" else "desc",
-            "at_risk_only": at_risk_only,
-            "total_considered": len(enriched),
-            "items": items,
+            "id": str(member.id),
+            "name": member.name,
+            "role": member.title or member.role.value,
+            "department": member.department or "General",
+            "profile_avatar": member.profile_picture,
+            "goal_progress_percent": round(avg_progress, 1),
+            "status": "On Track" if avg_progress >= 70 else "At Risk",
+            "current_workload": round(float(goal_row.get("workload", 0.0)), 1),
+            "current_goals_count": int(goal_row.get("goal_count", 0)),
+            "consistency_percent": round(consistency, 1),
+            "avg_final_rating": round(float(ratings.get(member.id, 0.0)), 2),
+            "completed_goals": int(goal_row.get("completed_goals", 0)),
+            "last_checkin": checkin_row.get("last_checkin"),
+            "checkins_used": int(checkin_row.get("done", 0)),
+            "checkins_total": max(5, int(checkin_row.get("total", 0))),
         }
 
     @staticmethod
     async def list_team(current_user: User, db: AsyncSession) -> list[dict]:
-        await ManagerService._ensure_team_data(current_user, db)
+        team = await ManagerService._fetch_team_members(current_user, db)
+        member_ids = [member.id for member in team]
+        metrics = await ManagerService._team_metrics(member_ids, db)
 
-        result = await db.execute(
-            select(User)
-            .where(
-                User.manager_id == current_user.id,
-                User.organization_id == current_user.organization_id,
-                User.is_active.is_(True),
-            )
-            .order_by(User.name.asc())
-        )
-        team = list(result.scalars().all())
-        team_ids = [member.id for member in team]
-
-        workload_map: dict[str, float] = {}
-        goals_count_map: dict[str, int] = {}
-        progress_map: dict[str, float] = {}
-        consistency_map: dict[str, float] = {}
-        avg_final_rating_map: dict[str, float] = {}
-        if team_ids:
-            workload_result = await db.execute(
-                select(
-                    Goal.user_id,
-                    func.coalesce(func.avg(Goal.progress), 0.0),
-                    func.coalesce(func.sum(Goal.weightage), 0.0),
-                    func.count(Goal.id),
-                )
-                .where(Goal.user_id.in_(team_ids), Goal.status != GoalStatus.rejected)
-                .group_by(Goal.user_id)
-            )
-            for user_id, progress, workload, count in workload_result.all():
-                progress_map[str(user_id)] = round(float(progress or 0.0), 1)
-                workload_map[str(user_id)] = round(float(workload or 0.0), 1)
-                goals_count_map[str(user_id)] = int(count or 0)
-
-            consistency_result = await db.execute(
-                select(
-                    Checkin.employee_id,
-                    func.count(Checkin.id),
-                    func.coalesce(
-                        func.sum(
-                            case(
-                                (Checkin.status.in_([CheckinStatus.submitted, CheckinStatus.reviewed]), 1),
-                                else_=0,
-                            )
-                        ),
-                        0,
-                    ),
-                )
-                .where(Checkin.employee_id.in_(team_ids))
-                .group_by(Checkin.employee_id)
-            )
-            for user_id, total_checkins, completed_checkins in consistency_result.all():
-                total = int(total_checkins or 0)
-                completed = int(completed_checkins or 0)
-                consistency_map[str(user_id)] = round((completed / total) * 100.0, 1) if total else 0.0
-
-            rating_result = await db.execute(
-                select(
-                    CheckinRating.employee_id,
-                    func.coalesce(func.avg(CheckinRating.rating), 0.0),
-                )
-                .where(CheckinRating.employee_id.in_(team_ids))
-                .group_by(CheckinRating.employee_id)
-            )
-            for user_id, avg_rating in rating_result.all():
-                avg_final_rating_map[str(user_id)] = round(float(avg_rating or 0.0), 2)
-
-        payload: list[dict] = []
-        for member in team:
-            member_id = str(member.id)
-            progress = progress_map.get(member_id, 0.0)
-            payload.append(
-                {
-                    "id": member_id,
-                    "name": member.name,
-                    "role": member.title or member.role.value,
-                    "department": member.department or "General",
-                    "profile_avatar": member.profile_picture,
-                    "goal_progress_percent": progress,
-                    "status": "On Track" if progress >= 70 else "At Risk",
-                    "current_workload": workload_map.get(member_id, 0.0),
-                    "current_goals_count": goals_count_map.get(member_id, 0),
-                    "consistency_percent": consistency_map.get(member_id, 0.0),
-                    "avg_final_rating": avg_final_rating_map.get(member_id, 0.0),
-                }
-            )
-
-        return payload
+        return [
+            ManagerService._member_payload(member, metrics["goals"], metrics["checkins"], metrics["ratings"])
+            for member in team
+        ]
 
     @staticmethod
-    async def inspect_employee(current_user: User, employee_id: str, db: AsyncSession) -> dict:
-        try:
-            employee_uuid = UUID(employee_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid employee id") from exc
-
-        employee = await db.get(User, employee_uuid)
-        if not employee or not employee.is_active:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
-
-        if current_user.role == UserRole.manager and employee.manager_id != current_user.id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your direct report")
-
-        if employee.organization_id != current_user.organization_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-organization access is not allowed")
-
-        goals_result = await db.execute(select(Goal).where(Goal.user_id == employee.id).order_by(Goal.created_at.desc()))
-        goals = list(goals_result.scalars().all())
-
-        checkins_result = await db.execute(
-            select(Checkin).where(Checkin.employee_id == employee.id).order_by(Checkin.meeting_date.desc())
+    async def inspect_employee(current_user: User, employee_id: UUID, db: AsyncSession) -> dict:
+        employee_result = await db.execute(
+            select(User).where(
+                User.id == employee_id,
+                User.organization_id == current_user.organization_id,
+                User.is_active.is_(True),
+                User.role == UserRole.employee,
+                User.manager_id == current_user.id,
+            )
         )
-        checkins = list(checkins_result.scalars().all())
+        employee = employee_result.scalar_one_or_none()
+        if employee is None:
+            return {}
 
-        reviews_result = await db.execute(
+        goal_rows_result = await db.execute(
+            select(Goal)
+            .where(
+                Goal.user_id == employee.id,
+                Goal.status != GoalStatus.rejected,
+            )
+            .order_by(Goal.updated_at.desc())
+        )
+        goal_rows = list(goal_rows_result.scalars().all())
+
+        checkin_rows_result = await db.execute(
+            select(Checkin)
+            .where(Checkin.employee_id == employee.id)
+            .order_by(Checkin.created_at.desc())
+        )
+        checkin_rows = list(checkin_rows_result.scalars().all())
+
+        rating_rows_result = await db.execute(
+            select(Rating)
+            .where(Rating.employee_id == employee.id)
+            .order_by(Rating.created_at.desc())
+        )
+        rating_rows = list(rating_rows_result.scalars().all())
+
+        performance_rows_result = await db.execute(
             select(PerformanceReview)
             .where(PerformanceReview.employee_id == employee.id)
             .order_by(PerformanceReview.cycle_year.desc(), PerformanceReview.cycle_quarter.desc())
-            .limit(12)
         )
-        reviews = list(reviews_result.scalars().all())
+        performance_rows = list(performance_rows_result.scalars().all())
 
-        ratings_result = await db.execute(
-            select(Rating).where(Rating.employee_id == employee.id).order_by(Rating.created_at.desc())
+        goals_completed = sum(1 for row in goal_rows if float(row.progress or 0.0) >= 100.0)
+        avg_progress = (
+            sum(float(row.progress or 0.0) for row in goal_rows) / len(goal_rows)
+            if goal_rows
+            else 0.0
         )
-        ratings = list(ratings_result.scalars().all())
 
-        workload = round(sum(goal.weightage for goal in goals if goal.status != GoalStatus.rejected), 1)
-        completed = sum(1 for goal in goals if goal.status == GoalStatus.approved and goal.progress >= 100)
-        progress = round((sum(goal.progress for goal in goals) / len(goals)) if goals else 0.0, 1)
-        submitted_checkins = sum(1 for row in checkins if row.status.value in {"submitted", "reviewed"})
-        consistency = round((submitted_checkins / len(checkins) * 100.0), 1) if checkins else 0.0
-        last_checkin = checkins[0].created_at if checkins else None
+        checkins_done = sum(1 for row in checkin_rows if row.status in {CheckinStatus.submitted, CheckinStatus.reviewed})
+        consistency = (float(checkins_done) / float(len(checkin_rows)) * 100.0) if checkin_rows else 0.0
 
-        latest_review = reviews[0] if reviews else None
-        strengths = [item.strip() for item in (latest_review.strengths.split(",") if latest_review and latest_review.strengths else []) if item.strip()]
-        weaknesses = [item.strip() for item in (latest_review.weaknesses.split(",") if latest_review and latest_review.weaknesses else []) if item.strip()]
-        growth_areas = [item.strip() for item in (latest_review.growth_areas.split(",") if latest_review and latest_review.growth_areas else []) if item.strip()]
+        workload = sum(float(row.weightage or 0.0) for row in goal_rows)
+        last_checkin = checkin_rows[0].created_at.isoformat() if checkin_rows else None
+
+        strengths: list[str] = []
+        weaknesses: list[str] = []
+        growth_areas: list[str] = []
+        for row in performance_rows:
+            strengths.extend(ManagerService._split_insight_text(row.strengths))
+            weaknesses.extend(ManagerService._split_insight_text(row.weaknesses))
+            growth_areas.extend(ManagerService._split_insight_text(row.growth_areas))
 
         if not strengths:
-            strengths.append("Consistent contribution to active goals")
+            strengths = ["Consistent collaboration"]
         if not weaknesses:
-            weaknesses.append("No explicit weaknesses captured yet")
+            weaknesses = ["Limited recent review notes"]
         if not growth_areas:
-            growth_areas.append("Build depth in role-specific execution")
+            growth_areas = ["Expand cross-functional impact"]
 
         return {
             "employee_id": str(employee.id),
@@ -633,51 +370,256 @@ class ManagerService:
             "role": employee.title or employee.role.value,
             "department": employee.department or "General",
             "email": employee.email,
-            "progress": progress,
-            "goals_completed": completed,
-            "consistency": consistency,
+            "progress": round(avg_progress, 1),
+            "goals_completed": int(goals_completed),
+            "consistency": round(consistency, 1),
             "last_checkin": last_checkin,
-            "current_workload": workload,
+            "current_workload": round(workload, 1),
             "goals": [
                 {
-                    "id": str(item.id),
-                    "title": item.title,
-                    "progress": item.progress,
-                    "status": item.status.value,
+                    "id": str(row.id),
+                    "title": row.title,
+                    "progress": round(float(row.progress or 0.0), 1),
+                    "status": row.status.value,
                 }
-                for item in goals
+                for row in goal_rows
             ],
             "checkins": [
                 {
-                    "id": str(item.id),
-                    "meeting_date": item.created_at,
-                    "summary": item.summary,
-                    "notes": item.manager_feedback or item.achievements or item.summary,
+                    "id": str(row.id),
+                    "meeting_date": (row.meeting_date or row.created_at).isoformat(),
+                    "summary": row.summary,
+                    "notes": row.manager_feedback,
                 }
-                for item in checkins
+                for row in checkin_rows
             ],
             "ratings": [
                 {
-                    "id": str(item.id),
-                    "rating": item.rating_label.value,
-                    "comments": item.comments,
-                    "created_at": item.created_at,
+                    "id": str(row.id),
+                    "rating": row.rating_label.value,
+                    "comments": row.comments,
+                    "created_at": row.created_at.isoformat(),
                 }
-                for item in ratings
+                for row in rating_rows
             ],
             "performance_history": [
                 {
-                    "cycle_year": row.cycle_year,
-                    "cycle_quarter": row.cycle_quarter,
-                    "overall_rating": row.overall_rating,
+                    "cycle_year": int(row.cycle_year),
+                    "cycle_quarter": int(row.cycle_quarter),
+                    "overall_rating": float(row.overall_rating) if row.overall_rating is not None else None,
                     "summary": row.summary,
-                    "comments": row.growth_areas,
+                    "comments": row.summary,
                 }
-                for row in reviews
+                for row in performance_rows
             ],
             "ai_insights": {
-                "strengths": strengths,
-                "weaknesses": weaknesses,
-                "growth_areas": growth_areas,
+                "strengths": strengths[:6],
+                "weaknesses": weaknesses[:6],
+                "growth_areas": growth_areas[:6],
             },
+        }
+
+    @staticmethod
+    async def get_dashboard_payload(current_user: User, db: AsyncSession) -> dict:
+        team_members = await ManagerService._fetch_team_members(current_user, db)
+        member_ids = [member.id for member in team_members]
+        metrics = await ManagerService._team_metrics(member_ids, db)
+
+        team = [
+            ManagerService._member_payload(member, metrics["goals"], metrics["checkins"], metrics["ratings"])
+            for member in team_members
+        ]
+        team_size = len(team)
+
+        avg_progress = (
+            sum(float(member.get("goal_progress_percent", 0.0)) for member in team) / team_size
+            if team_size
+            else 0.0
+        )
+        avg_consistency = (
+            sum(float(member.get("consistency_percent", 0.0)) for member in team) / team_size
+            if team_size
+            else 0.0
+        )
+        at_risk = sum(1 for member in team if member.get("status") == "At Risk")
+        completed_goals = sum(int(member.get("completed_goals", 0)) for member in team)
+
+        pending_approvals = 0
+        if member_ids:
+            pending_result = await db.execute(
+                select(func.count(Goal.id)).where(
+                    Goal.user_id.in_(member_ids),
+                    Goal.status == GoalStatus.submitted,
+                )
+            )
+            pending_approvals = int(pending_result.scalar() or 0)
+
+        ranking_rows = sorted(
+            [
+                {
+                    "name": member.get("name", "Unknown"),
+                    "score": round(float(member.get("goal_progress_percent", 0.0)), 1),
+                    "trend": "up" if float(member.get("goal_progress_percent", 0.0)) >= 70 else "flat" if float(member.get("goal_progress_percent", 0.0)) >= 40 else "down",
+                }
+                for member in team
+            ],
+            key=lambda row: row["score"],
+            reverse=True,
+        )
+
+        rag_heatmap = [
+            {
+                "id": member.get("id"),
+                "name": member.get("name", "Unknown"),
+                "progress": round(float(member.get("goal_progress_percent", 0.0)), 1),
+                "consistency": round(float(member.get("consistency_percent", 0.0)), 1),
+                "intensity": "high" if float(member.get("goal_progress_percent", 0.0)) < 40 else "medium" if float(member.get("goal_progress_percent", 0.0)) < 70 else "low",
+            }
+            for member in team
+        ]
+
+        checkin_status = [
+            {
+                "employee_id": member.get("id"),
+                "name": member.get("name", "Unknown"),
+                "checkins_used": int(member.get("checkins_used", 0)),
+                "checkins_total": int(member.get("checkins_total", 5)),
+                "last_checkin": member.get("last_checkin"),
+            }
+            for member in team
+        ]
+
+        performers = [
+            {
+                "employee_id": member.get("id"),
+                "employee_name": member.get("name", "Unknown"),
+                "progress": round(float(member.get("goal_progress_percent", 0.0)), 1),
+                "rating": round(float(member.get("avg_final_rating", 0.0)), 2),
+                "consistency": round(float(member.get("consistency_percent", 0.0)), 1),
+            }
+            for member in team
+        ]
+        top_performers = sorted(performers, key=lambda row: row["progress"], reverse=True)[:3]
+        low_performers = sorted(performers, key=lambda row: row["progress"])[:3]
+
+        return {
+            "team_size": team_size,
+            "avg_performance": round(avg_progress, 1),
+            "avg_progress": round(avg_progress, 1),
+            "consistency": round(avg_consistency, 1),
+            "at_risk": at_risk,
+            "pending_approvals": pending_approvals,
+            "completed_goals": completed_goals,
+            "team": [
+                {
+                    "employee_id": member.get("id"),
+                    "employee_name": member.get("name", "Unknown"),
+                    "progress": round(float(member.get("goal_progress_percent", 0.0)), 1),
+                    "rating": round(float(member.get("avg_final_rating", 0.0)), 2),
+                    "consistency": round(float(member.get("consistency_percent", 0.0)), 1),
+                    "department": member.get("department"),
+                }
+                for member in team
+            ],
+            "stack_ranking": ranking_rows,
+            "rag_heatmap": rag_heatmap,
+            "performance_trend": metrics["trend"][-8:],
+            "rating_distribution": metrics["distribution"],
+            "checkin_status": checkin_status,
+            "top_performers": top_performers,
+            "low_performers": low_performers,
+            "insights": [
+                f"{at_risk} team member(s) currently need attention.",
+                f"Average team progress is {round(avg_progress, 1)}%.",
+            ],
+        }
+
+    @staticmethod
+    async def get_team_performance_payload(current_user: User, db: AsyncSession) -> dict:
+        dashboard = await ManagerService.get_dashboard_payload(current_user, db)
+        team = dashboard["team"]
+        raw_team = await ManagerService.list_team(current_user, db)
+        workload_map = {member.get("id"): float(member.get("current_workload", 0.0)) for member in raw_team}
+
+        workload = [
+            {
+                "employee_id": row.get("employee_id"),
+                "employee_name": row.get("employee_name", "Unknown"),
+                "total_weightage": round(float(workload_map.get(row.get("employee_id"), 0.0)), 1),
+            }
+            for row in team
+        ]
+
+        return {
+            "team_size": dashboard["team_size"],
+            "avg_performance": dashboard["avg_performance"],
+            "avg_progress": dashboard["avg_progress"],
+            "completed_goals": dashboard["completed_goals"],
+            "consistency": dashboard["consistency"],
+            "at_risk": dashboard["at_risk"],
+            "trend": dashboard["performance_trend"],
+            "distribution": dashboard["rating_distribution"],
+            "workload": workload,
+            "performers": {
+                "top": dashboard["top_performers"],
+                "low": dashboard["low_performers"],
+            },
+            "top_performers": dashboard["top_performers"],
+            "low_performers": dashboard["low_performers"],
+            "team": dashboard["team"],
+            "insights": dashboard["insights"],
+        }
+
+    @staticmethod
+    async def get_stack_ranking_payload(
+        current_user: User,
+        db: AsyncSession,
+        *,
+        sort_by: Literal["progress", "rating", "consistency"] = "progress",
+        order: Literal["asc", "desc"] = "desc",
+        at_risk_only: bool = False,
+        limit: int = 10,
+    ) -> dict:
+        team = await ManagerService.list_team(current_user, db)
+
+        items = [
+            {
+                "employee_id": row.get("id"),
+                "employee_name": row.get("name", "Unknown"),
+                "progress": round(float(row.get("goal_progress_percent", 0.0)), 1),
+                "rating": round(float(row.get("avg_final_rating", 0.0)), 2),
+                "consistency": round(float(row.get("consistency_percent", 0.0)), 1),
+            }
+            for row in team
+        ]
+
+        if at_risk_only:
+            items = [row for row in items if row["progress"] < 50 or row["rating"] <= 2.0]
+
+        reverse = order != "asc"
+        items = sorted(items, key=lambda row: row.get(sort_by, 0), reverse=reverse)
+
+        sliced = items[: max(1, min(limit, 100))]
+        ranked = []
+        for index, row in enumerate(sliced, start=1):
+            risk_level = "low"
+            if row["progress"] < 40 or row["rating"] <= 2.0 or row["consistency"] < 50:
+                risk_level = "high"
+            elif row["progress"] < 70 or row["rating"] < 3.0 or row["consistency"] < 70:
+                risk_level = "medium"
+
+            ranked.append(
+                {
+                    "rank": index,
+                    **row,
+                    "risk_level": risk_level,
+                }
+            )
+
+        return {
+            "sort_by": sort_by,
+            "order": order,
+            "at_risk_only": at_risk_only,
+            "total_considered": len(items),
+            "items": ranked,
         }

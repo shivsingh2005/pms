@@ -30,11 +30,6 @@ interface NavItem {
   badgeColor?: "green" | "red" | "amber" | "blue";
 }
 
-interface NavRole {
-  role: string;
-  items: NavItem[];
-}
-
 /**
  * Simplified Navigation Component
  *
@@ -69,11 +64,11 @@ export function SimplifiedNavigation() {
         href: "/manager/dashboard",
         badge: undefined,
       },
-      { icon: Users, label: "My Team", href: "/manager/team" },
-      { icon: Target, label: "Goals", href: "/manager/goals" },
-      { icon: CheckSquare, label: "Check-ins", href: "/manager/checkins" },
-      { icon: BarChart3, label: "Performance", href: "/manager/performance" },
-      { icon: Calendar, label: "Meetings", href: "/manager/meetings" },
+      { icon: Users, label: "My Team", href: "/manager/team-dashboard" },
+      { icon: Target, label: "Goals", href: "/manager/goals-allotment" },
+      { icon: CheckSquare, label: "Goal Approvals", href: "/manager/goal-approvals" },
+      { icon: BarChart3, label: "Team Analytics", href: "/manager/team-performance" },
+      { icon: Calendar, label: "Meetings", href: "/meetings" },
     ],
     hr: [
       { icon: Home, label: "Dashboard", href: "/hr/dashboard" },

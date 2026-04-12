@@ -12,11 +12,13 @@ import { managerService } from "@/services/manager";
 import { meetingsService } from "@/services/meetings";
 import { checkinsService } from "@/services/checkins";
 import { aiService } from "@/services/ai";
+import { goalsService } from "@/services/goals";
 import { useSessionStore } from "@/store/useSessionStore";
 import type {
   AIFeedbackCoachingResult,
   CheckinRatingRecommendation,
   CheckinTranscriptIngestResult,
+  ManagerPendingGoal,
   Meeting,
   MeetingProposal,
 } from "@/types";
@@ -29,6 +31,8 @@ export default function ManagerApprovalsPage() {
   const setActiveMode = useSessionStore((state) => state.setActiveMode);
   const [proposals, setProposals] = useState<MeetingProposal[]>([]);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [pendingGoals, setPendingGoals] = useState<ManagerPendingGoal[]>([]);
+  const [goalCommentById, setGoalCommentById] = useState<Record<string, string>>({});
   const [rejectSuggestionByProposal, setRejectSuggestionByProposal] = useState<Record<string, string>>({});
   const [ratingsByCheckin, setRatingsByCheckin] = useState<Record<string, RatingDraft>>({});
   const [transcriptByCheckin, setTranscriptByCheckin] = useState<Record<string, string>>({});
@@ -38,12 +42,14 @@ export default function ManagerApprovalsPage() {
   const [submittingByCheckin, setSubmittingByCheckin] = useState<Record<string, boolean>>({});
 
   const load = async () => {
-    const [pendingProposals, allMeetings] = await Promise.all([
+    const [pendingProposals, allMeetings, pendingGoalApprovals] = await Promise.all([
       managerService.getPendingMeetingProposals(),
       meetingsService.getMeetings(),
+      goalsService.getManagerPendingGoals(),
     ]);
     setProposals(pendingProposals);
     setMeetings(allMeetings);
+    setPendingGoals(pendingGoalApprovals);
   };
 
   useEffect(() => {
@@ -145,6 +151,36 @@ export default function ManagerApprovalsPage() {
     }
   };
 
+  const decideGoal = async (goalId: string, action: "approve" | "request-edit" | "reject") => {
+    const comment = (goalCommentById[goalId] || "").trim();
+
+    if (action === "reject" && !comment) {
+      toast.error("Rejection reason is required");
+      return;
+    }
+
+    try {
+      if (action === "approve") {
+        await goalsService.managerApproveGoal(goalId, comment || undefined);
+      } else if (action === "request-edit") {
+        await goalsService.managerRequestEdit(goalId, comment || undefined);
+      } else {
+        await goalsService.managerRejectGoal(goalId, comment);
+      }
+
+      setGoalCommentById((prev) => ({ ...prev, [goalId]: "" }));
+      await load();
+      toast.success("Goal decision saved");
+    } catch (error: unknown) {
+      const detail =
+        error && typeof error === "object" && "response" in error
+          ? (error as { response?: { data?: { detail?: string; error?: string } } }).response?.data?.detail ||
+            (error as { response?: { data?: { detail?: string; error?: string } } }).response?.data?.error
+          : undefined;
+      toast.error(detail || "Failed to save goal decision");
+    }
+  };
+
   const ingestTranscript = async (checkinId: string) => {
     const transcript = (transcriptByCheckin[checkinId] || "").trim();
     if (transcript.length < 10) {
@@ -205,10 +241,41 @@ export default function ManagerApprovalsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Pending Meeting Approvals"
-        description="Approve or reject proposed check-in meetings, then rate employees after meetings end."
+        title="Approvals"
+        description="Approve self-created employee goals, review check-in meetings, and rate employees after meetings end."
         action={<Button variant="outline" onClick={() => load().catch(() => toast.error("Refresh failed"))}>Refresh</Button>}
       />
+
+      <Card className="space-y-3 rounded-2xl border border-border/75 bg-card/95">
+        <CardTitle>Goal Approvals</CardTitle>
+        <CardDescription>Review employee-submitted self-created goals. Employees must wait for approval before they can start check-ins.</CardDescription>
+        {pendingGoals.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No pending goals awaiting approval.</p>
+        ) : (
+          pendingGoals.map((item) => (
+            <div key={item.goal.id} className="space-y-2 rounded-md border border-border/70 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium">{item.goal.title}</p>
+                <p className="text-xs text-muted-foreground">{item.goal.weightage}%</p>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {item.employee_name} ({item.employee_role})
+              </p>
+              {item.goal.description ? <p className="text-xs text-muted-foreground">{item.goal.description}</p> : null}
+              <Textarea
+                placeholder="Manager comment (required for reject)"
+                value={goalCommentById[item.goal.id] || ""}
+                onChange={(event) => setGoalCommentById((prev) => ({ ...prev, [item.goal.id]: event.target.value }))}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => decideGoal(item.goal.id, "approve")}>Approve</Button>
+                <Button size="sm" variant="secondary" onClick={() => decideGoal(item.goal.id, "request-edit")}>Request Edit</Button>
+                <Button size="sm" variant="outline" onClick={() => decideGoal(item.goal.id, "reject")}>Reject</Button>
+              </div>
+            </div>
+          ))
+        )}
+      </Card>
 
       <Card className="space-y-3 rounded-2xl border border-border/75 bg-card/95">
         <CardTitle>Meeting Proposals</CardTitle>

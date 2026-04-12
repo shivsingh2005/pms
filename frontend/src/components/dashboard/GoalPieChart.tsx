@@ -1,6 +1,6 @@
 "use client";
 
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "@/components/charts/recharts-lazy";
+import { LazyPieChart } from "@/components/charts";
 
 import { ChartCard } from "@/components/dashboard/ChartCard";
 
@@ -38,27 +38,15 @@ export function GoalPieChart({ data }: GoalPieChartProps) {
     >
       <div className="h-64 rounded-xl border border-border bg-surface p-4 shadow-soft">
         {safeData.length ? (
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={safeData}
-                dataKey="value"
-                nameKey="name"
-                innerRadius={52}
-                outerRadius={86}
-                paddingAngle={3}
-                stroke="rgba(255,255,255,0.2)"
-                strokeWidth={1}
-                isAnimationActive
-                animationDuration={800}
-              >
-                {safeData.map((entry, idx) => (
-                  <Cell key={`${entry.name}-${idx}`} fill={COLORS[idx % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600, marginBottom: 4 }} />
-            </PieChart>
-          </ResponsiveContainer>
+          <LazyPieChart
+            data={safeData}
+            dataKey="value"
+            nameKey="name"
+            innerRadius={52}
+            outerRadius={86}
+            colors={COLORS}
+            tooltipStyle={chartTooltipStyle}
+          />
         ) : (
           <div className="h-full flex items-center justify-center text-sm text-muted-foreground">No data available</div>
         )}

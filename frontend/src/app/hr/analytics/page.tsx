@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { MetricChart } from "@/components/dashboard/MetricChart";
+import { resolveTrainingFocus, summarizeTopTrainingFocus } from "@/lib/training-focus";
 import { hrService } from "@/services/hr";
 import { useSessionStore } from "@/store/useSessionStore";
 import type { HROrgAnalytics, HROverview } from "@/types";
@@ -45,6 +46,20 @@ export default function HRAnalyticsPage() {
       label,
       value: counts.get(label) ?? 0,
     }));
+  }, [overview?.training_heatmap]);
+
+  const topTrainingFocus = useMemo(() => {
+    const focuses = (overview?.training_heatmap ?? [])
+      .filter((row) => row.needs_training)
+      .map((row) =>
+        resolveTrainingFocus({
+          progress: Number(row.progress ?? 0),
+          consistency: Number(row.consistency ?? 0),
+          rating: Number(row.rating ?? 0),
+          needsTraining: Boolean(row.needs_training),
+        }),
+      );
+    return summarizeTopTrainingFocus(focuses);
   }, [overview?.training_heatmap]);
 
   if (!user) return null;
@@ -96,7 +111,7 @@ export default function HRAnalyticsPage() {
 
           <Card className="rounded-xl border bg-card p-5 xl:col-span-2">
             <CardTitle>Training Need Distribution</CardTitle>
-            <CardDescription>Derived from current heatmap levels.</CardDescription>
+            <CardDescription>Derived from current heatmap levels. Most needed training type: {topTrainingFocus}.</CardDescription>
             <div className="mt-4">
               <MetricChart
                 kind="bar"

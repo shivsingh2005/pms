@@ -8,17 +8,21 @@ const dmSans = DM_Sans({
   subsets: ["latin"],
   variable: "--font-dm-sans",
   weight: ["400", "500", "600", "700"],
+  display: "swap",
+  preload: true,
 });
 
 const syne = Syne({
   subsets: ["latin"],
   variable: "--font-syne",
-  weight: ["500", "600", "700"],
+  weight: ["600", "700"],
+  display: "swap",
+  preload: true,
 });
 
 export const metadata: Metadata = {
-  title: "AI-Native PMS",
-  description: "Performance management platform with AI insights",
+  title: "PMS - Performance Management",
+  description: "AI-native performance management system",
 };
 
 export default function RootLayout({
@@ -27,9 +31,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning className={`${dmSans.variable} ${syne.variable}`}>
       <body
-        className={`${dmSans.variable} ${syne.variable} min-h-screen antialiased`}
+        className="min-h-screen bg-background font-sans text-foreground antialiased"
       >
         <AppProviders>
           <AppShell>{children}</AppShell>

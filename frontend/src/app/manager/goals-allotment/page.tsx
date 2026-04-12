@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { GoalLineageGraph } from "@/components/goals/GoalLineageGraph";
+import { aiService } from "@/services/ai";
 import { goalsService } from "@/services/goals";
 import { managerService } from "@/services/manager";
 import { useSessionStore } from "@/store/useSessionStore";
@@ -67,6 +68,10 @@ function roleLabel(role: string): string {
     .join(" ");
 }
 
+function normalizeRoleKey(value: string): string {
+  return (value || "").trim().toLowerCase().replace(/[_-]+/g, " ");
+}
+
 function buildFallbackClusters(teamMembers: ManagerTeamMember[]): RoleGoalCluster[] {
   const roleToMembers = new Map<string, ManagerTeamMember[]>();
 
@@ -78,7 +83,7 @@ function buildFallbackClusters(teamMembers: ManagerTeamMember[]): RoleGoalCluste
   }
 
   const clusters: RoleGoalCluster[] = [];
-  for (const [role, members] of roleToMembers.entries()) {
+  for (const [role, members] of Array.from(roleToMembers.entries())) {
     const teamSize = members.length;
     clusters.push({
       role,
@@ -137,11 +142,44 @@ export default function ManagerGoalsAllotmentPage() {
   const [parentGoalId, setParentGoalId] = useState("");
   const [cascadeTargets, setCascadeTargets] = useState<CascadeTargetState[]>([]);
   const [cascading, setCascading] = useState(false);
+  const [subgoals, setSubgoals] = useState<string[]>([]);
+  const [breakingSubgoals, setBreakingSubgoals] = useState(false);
 
   const [drifts, setDrifts] = useState<GoalDriftInsight[]>([]);
   const [lineageGoalId, setLineageGoalId] = useState("");
   const [lineage, setLineage] = useState<GoalLineage | null>(null);
   const [changeLogs, setChangeLogs] = useState<GoalChangeLog[]>([]);
+
+  const buildFallbackCandidates = useCallback(
+    (roleFilter?: string): GoalAssignmentCandidate[] => {
+      const normalizedFilter = normalizeRoleKey(roleFilter || "");
+
+      const filteredTeam = normalizedFilter && normalizedFilter !== "general"
+        ? teamMembers.filter((member) => {
+            const memberRole = normalizeRoleKey(member.role);
+            return memberRole === normalizedFilter || memberRole.includes(normalizedFilter) || normalizedFilter.includes(memberRole);
+          })
+        : teamMembers;
+
+      const source = filteredTeam.length > 0 ? filteredTeam : teamMembers;
+
+      return source.map((member) => {
+        const workload = Number(member.current_workload || 0);
+        return {
+          employee_id: member.id,
+          employee_name: member.name,
+          role: member.role,
+          role_key: normalizeRoleKey(member.role),
+          goal_count: Number(member.current_goals_count || 0),
+          total_weightage: workload,
+          active_checkins: 0,
+          workload_percent: workload,
+          workload_status: workload < 50 ? "low" : workload < 80 ? "medium" : "high",
+        };
+      });
+    },
+    [teamMembers],
+  );
 
   const initializePhase2 = useCallback(async () => {
     try {
@@ -295,12 +333,79 @@ export default function ManagerGoalsAllotmentPage() {
     setLoadingCandidates(true);
     try {
       const rows = await goalsService.getAssignmentCandidates(role);
-      setCandidates(rows);
+      setCandidates(rows.length > 0 ? rows : buildFallbackCandidates(role));
     } catch {
-      setCandidates([]);
-      toast.error("Failed to load role-matched employees");
+      setCandidates(buildFallbackCandidates(role));
+      toast.error("Role match unavailable. Showing team members instead.");
     } finally {
       setLoadingCandidates(false);
+    }
+  };
+
+  const openManualAssignModal = async () => {
+    const role = activeRole || "General";
+    setEditor({
+      role,
+      title: "",
+      description: "",
+      kpi: "",
+      weightage: 25,
+    });
+    setAssignOpen(true);
+    setSelectedEmployeeId("");
+    setAllowOverload(false);
+
+    setLoadingCandidates(true);
+    try {
+      const rows = await goalsService.getAssignmentCandidates(role);
+      setCandidates(rows.length > 0 ? rows : buildFallbackCandidates(role));
+    } catch {
+      setCandidates(buildFallbackCandidates(role));
+      toast.error("Role match unavailable. Showing team members instead.");
+    } finally {
+      setLoadingCandidates(false);
+    }
+  };
+
+  const breakGoalIntoSubgoals = async () => {
+    if (!editor) {
+      toast.error("Pick an AI cluster goal or create a manual goal first");
+      return;
+    }
+
+    const selectedTargets = cascadeTargets.filter((row) => row.selected);
+    const expectedSubgoalCount = Math.max(selectedTargets.length, 3);
+
+    setBreakingSubgoals(true);
+    try {
+      const prompt = [
+        "Break this manager goal into concise execution subgoals for team allocation.",
+        `Role: ${editor.role}`,
+        `Goal Title: ${editor.title}`,
+        `Goal Description: ${editor.description}`,
+        `KPI: ${editor.kpi || "N/A"}`,
+        `Create ${expectedSubgoalCount} subgoals as a plain numbered list.`,
+        "Each line should be only the subgoal title.",
+      ].join("\n");
+
+      const response = await aiService.ask(prompt, "manager-goals-allotment");
+      const parsed = String(response.response || "")
+        .split("\n")
+        .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim())
+        .filter((line) => line.length > 0)
+        .slice(0, expectedSubgoalCount);
+
+      if (parsed.length === 0) {
+        toast.error("AI could not generate subgoals. Please try again.");
+        return;
+      }
+
+      setSubgoals(parsed);
+      toast.success(`Generated ${parsed.length} subgoals with AI`);
+    } catch {
+      toast.error("Failed to generate subgoals with AI");
+    } finally {
+      setBreakingSubgoals(false);
     }
   };
 
@@ -379,23 +484,30 @@ export default function ManagerGoalsAllotmentPage() {
 
     setCascading(true);
     try {
+      const seededSubgoals = subgoals.filter((item) => item.trim().length > 0);
       const result = await goalsService.cascadeGoal({
         parent_goal_id: parentGoalId,
         normalize_weights: true,
-        children: selectedTargets.map((row) => ({
-          employee_id: row.employee_id,
-          title: editor.title,
-          description: editor.description,
-          kpi: editor.kpi || undefined,
-          framework: "OKR",
-          weightage: row.contribution_weight,
-          progress: 0,
-        })),
+        children: selectedTargets.map((row, index) => {
+          const subgoalTitle = seededSubgoals[index % seededSubgoals.length];
+          return {
+            employee_id: row.employee_id,
+            title: subgoalTitle || editor.title,
+            description: subgoalTitle
+              ? `${editor.description}\n\nSubgoal focus: ${subgoalTitle}`
+              : editor.description,
+            kpi: editor.kpi || undefined,
+            framework: "OKR",
+            weightage: row.contribution_weight,
+            progress: 0,
+          };
+        }),
       });
 
       toast.success(`Cascaded to ${result.children_created} team members`);
       const driftRows = await goalsService.getGoalDriftInsights();
       setDrifts(driftRows);
+      setSubgoals([]);
     } catch {
       toast.error("Failed to cascade goal");
     } finally {
@@ -431,10 +543,15 @@ export default function ManagerGoalsAllotmentPage() {
         title="Manager Goal Assignment"
         description="AI suggests role-based goals; managers manually assign with role match and workload checks."
         action={
-          <Button onClick={generateRoleClusters} disabled={generating}>
-            <Sparkles className="mr-2 h-4 w-4" />
-            {generating ? "Generating..." : "Generate Role Clusters"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => void openManualAssignModal()}>
+              Create Goal Manually
+            </Button>
+            <Button onClick={generateRoleClusters} disabled={generating}>
+              <Sparkles className="mr-2 h-4 w-4" />
+              {generating ? "Generating..." : "Generate Role Clusters"}
+            </Button>
+          </div>
         }
       />
 
@@ -548,6 +665,34 @@ export default function ManagerGoalsAllotmentPage() {
           </div>
         </div>
 
+        <div className="rounded-lg border border-border/70 p-3 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium text-foreground">AI Subgoal Breakdown (before allocation)</p>
+            <Button variant="outline" onClick={() => void breakGoalIntoSubgoals()} disabled={breakingSubgoals || !editor}>
+              <Sparkles className="mr-2 h-4 w-4" />
+              {breakingSubgoals ? "Breaking..." : "Break into Subgoals"}
+            </Button>
+          </div>
+
+          {subgoals.length === 0 ? (
+            <p className="text-xs text-muted-foreground">Generate subgoals with AI to cascade granular child goals to selected team members.</p>
+          ) : (
+            <div className="space-y-2">
+              {subgoals.map((subgoal, index) => (
+                <Input
+                  key={`subgoal-${index}`}
+                  value={subgoal}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setSubgoals((prev) => prev.map((item, idx) => (idx === index ? value : item)));
+                  }}
+                  placeholder={`Subgoal ${index + 1}`}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="space-y-2">
           {teamMembers.length === 0 ? (
             <p className="text-sm text-muted-foreground">No direct reports found.</p>
@@ -632,8 +777,8 @@ export default function ManagerGoalsAllotmentPage() {
       </Card>
 
       {assignOpen && editor ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <Card className="w-full max-w-3xl rounded-xl border bg-card p-5 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-black/60 p-4">
+          <Card className="my-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl border bg-card p-5 space-y-4">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <CardTitle>Assign Goal</CardTitle>
@@ -683,42 +828,25 @@ export default function ManagerGoalsAllotmentPage() {
               ) : candidates.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No role-matched employees available.</p>
               ) : (
-                <div className="max-h-72 overflow-y-auto space-y-2">
-                  {candidates.map((candidate) => {
-                    const selected = selectedEmployeeId === candidate.employee_id;
-                    return (
-                      <button
-                        key={candidate.employee_id}
-                        type="button"
-                        onClick={() => setSelectedEmployeeId(candidate.employee_id)}
-                        className={`w-full rounded-lg border p-3 text-left transition ${selected ? "border-primary bg-primary/5" : "border-border/70 bg-card"}`}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="font-medium text-foreground">{candidate.employee_name}</p>
-                            <p className="text-xs text-muted-foreground">{candidate.role}</p>
-                          </div>
-                          <span className={`rounded-full px-2 py-0.5 text-xs ${workloadBadgeClass(candidate.workload_status)}`}>
-                            {candidate.workload_status}
-                          </span>
-                        </div>
-
-                        <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-                          <p>Goals: {candidate.goal_count}</p>
-                          <p>Workload: {candidate.workload_percent}%</p>
-                          <p>Active check-ins: {candidate.active_checkins}</p>
-                        </div>
-
-                        <div className="mt-2 h-2 w-full rounded bg-muted/60">
-                          <div
-                            className={`h-2 rounded ${workloadColor(candidate.workload_percent)}`}
-                            style={{ width: `${Math.min(candidate.workload_percent, 100)}%` }}
-                          />
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+                <>
+                  <select
+                    className="h-10 w-full rounded-md border border-input bg-card px-3 text-sm"
+                    value={selectedEmployeeId}
+                    onChange={(event) => setSelectedEmployeeId(event.target.value)}
+                  >
+                    <option value="">Choose employee</option>
+                    {candidates.map((candidate) => (
+                      <option key={candidate.employee_id} value={candidate.employee_id}>
+                        {candidate.employee_name} ({candidate.role})
+                      </option>
+                    ))}
+                  </select>
+                  {selectedEmployeeId ? (
+                    <p className="text-xs text-muted-foreground">
+                      Selected: {candidates.find((candidate) => candidate.employee_id === selectedEmployeeId)?.employee_name || "Employee"}
+                    </p>
+                  ) : null}
+                </>
               )}
             </div>
 
@@ -732,7 +860,13 @@ export default function ManagerGoalsAllotmentPage() {
             </label>
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setAssignOpen(false)} disabled={assigning}>Cancel</Button>
+              <Button
+                variant="outline"
+                onClick={() => setAssignOpen(false)}
+                disabled={assigning}
+              >
+                Cancel
+              </Button>
               <Button onClick={submitAssignment} disabled={assigning || loadingCandidates}>Assign Goal</Button>
             </div>
           </Card>

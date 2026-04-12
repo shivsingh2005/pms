@@ -4,22 +4,37 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { PageHeader } from "@/components/ui/page-header";
-import { LeadershipDashboard } from "@/components/dashboard/LeadershipDashboard";
+import { Skeleton } from "@/components/ui/skeleton";
+import { DashboardError } from "@/components/ui/DashboardError";
+import { useAuth } from "@/context/AuthContext";
 import { WhatsNextBanner } from "@/components/dashboard/WhatsNextBanner";
-import { useSessionStore } from "@/store/useSessionStore";
+import { LeadershipDashboard } from "@/components/dashboard/LeadershipDashboard";
 
 export default function LeadershipOrgDashboardPage() {
   const router = useRouter();
-  const user = useSessionStore((state) => state.user);
+  const { user, ready } = useAuth();
 
   useEffect(() => {
+    if (!ready) {
+      return;
+    }
+
     if (!user) {
       router.push("/");
+      return;
     }
-  }, [router, user]);
 
-  if (!user) {
-    return null;
+    if (user.role !== "leadership" && user.role !== "hr") {
+      router.push("/unauthorized");
+    }
+  }, [ready, router, user]);
+
+  if (!ready) {
+    return <Skeleton className="h-[460px] rounded-2xl" />;
+  }
+
+  if (!user || (user.role !== "leadership" && user.role !== "hr")) {
+    return <Skeleton className="h-[460px] rounded-2xl" />;
   }
 
   return (
@@ -28,8 +43,10 @@ export default function LeadershipOrgDashboardPage() {
         title="Leadership Dashboard"
         description="Executive snapshot with one priority action. Open trend and talent pages for deeper analysis."
       />
-      <WhatsNextBanner />
-      <LeadershipDashboard />
+      <DashboardError name="LeadershipDashboard">
+        <WhatsNextBanner />
+        <LeadershipDashboard />
+      </DashboardError>
     </motion.div>
   );
 }

@@ -14,7 +14,8 @@ const leadershipNavItems = [
 ] as const;
 
 const leadershipGoalsNavItems = [
-  { href: "/leadership/goals", label: "AOP Targets", icon: Target },
+  { href: "/leadership/goals", label: "Cycle Workspace", icon: Target },
+  { href: "/leadership/goals/assignments", label: "Manager Cascade", icon: Target },
   { href: "/leadership/goals/progress", label: "Cascade Progress", icon: Target },
 ] as const;
 

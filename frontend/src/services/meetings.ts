@@ -10,6 +10,7 @@ interface MeetingPayload {
   participants: string[];
   checkin_id?: string;
   goal_id?: string;
+  goal_ids?: string[];
 }
 
 export const meetingsService = {

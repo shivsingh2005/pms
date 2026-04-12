@@ -1,88 +1,53 @@
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.rbac import require_roles
 from app.database import get_db
-from app.models.enums import UserRole
+from app.models.framework_selection import DepartmentFrameworkPolicy, UserFrameworkSelection
 from app.models.user import User
-from app.schemas.performance_cycle import (
-    DepartmentFrameworkPolicyRequest,
-    DepartmentFrameworkPolicyResponse,
-    FrameworkSelectionRequest,
-    FrameworkSelectionResponse,
-)
-from app.services.performance_cycle_service import PerformanceCycleService
 from app.utils.dependencies import get_current_user
 
-router = APIRouter(tags=["Framework"])
+router = APIRouter(prefix="/framework", tags=["Framework"])
 
 
-class FrameworkSelectBody(BaseModel):
-    employeeId: str | None = None
-    framework: str
-    cycleType: str = "quarterly"
-
-
-class FrameworkRecommendOut(BaseModel):
-    recommended: str
-    reason: str
-
-
-class HRFrameworkSettingsBody(BaseModel):
-    allowedFrameworks: list[str]
-    defaultFramework: str = "OKR"
-
-
-@router.get("/framework/recommend", response_model=FrameworkRecommendOut)
-async def recommend_framework(
-    role: str,
-    department: str | None = None,
-    _: User = Depends(get_current_user),
-) -> FrameworkRecommendOut:
-    framework, rationale = PerformanceCycleService.recommend_framework(role=role, department=department)
-    return FrameworkRecommendOut(recommended=framework, reason=rationale)
-
-
-@router.post("/framework/select", response_model=FrameworkSelectionResponse)
-async def select_framework(
-    payload: FrameworkSelectBody,
+@router.get("")
+async def list_frameworks(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> FrameworkSelectionResponse:
-    selection = await PerformanceCycleService.save_framework_selection(
-        current_user,
-        FrameworkSelectionRequest(selected_framework=payload.framework, cycle_type=payload.cycleType),
-        db,
+) -> dict:
+    user_selection_result = await db.execute(
+        select(UserFrameworkSelection).where(UserFrameworkSelection.user_id == current_user.id)
     )
-    return FrameworkSelectionResponse(
-        user_id=str(selection.user_id),
-        selected_framework=selection.selected_framework,
-        cycle_type=selection.cycle_type,
-        recommendation_reason=selection.recommendation_reason,
-    )
+    user_rows = list(user_selection_result.scalars().all())
 
+    policies_result = await db.execute(
+        select(DepartmentFrameworkPolicy).where(
+            DepartmentFrameworkPolicy.organization_id == current_user.organization_id
+        )
+    )
+    policy_rows = list(policies_result.scalars().all())
 
-@router.patch("/hr/framework-settings", response_model=DepartmentFrameworkPolicyResponse)
-async def update_framework_settings(
-    payload: HRFrameworkSettingsBody,
-    current_user: User = Depends(require_roles(UserRole.hr, UserRole.leadership)),
-    db: AsyncSession = Depends(get_db),
-) -> DepartmentFrameworkPolicyResponse:
-    policy = await PerformanceCycleService.upsert_department_policy(
-        current_user,
-        DepartmentFrameworkPolicyRequest(
-            department=current_user.department or "General",
-            allowed_frameworks=payload.allowedFrameworks,
-            cycle_type="quarterly",
-            is_active=True,
-        ),
-        db,
-    )
-    return DepartmentFrameworkPolicyResponse(
-        id=str(policy.id),
-        department=policy.department,
-        allowed_frameworks=policy.allowed_frameworks,
-        cycle_type=policy.cycle_type,
-        is_active=policy.is_active,
-    )
+    return {
+        "frameworks": {
+            "user_selections": [
+                {
+                    "id": str(row.id),
+                    "cycle_id": str(row.cycle_id),
+                    "framework_type": row.framework_type,
+                    "is_selected": row.is_selected,
+                }
+                for row in user_rows
+            ],
+            "department_policies": [
+                {
+                    "id": str(row.id),
+                    "cycle_id": str(row.cycle_id),
+                    "department": row.department,
+                    "framework_type": row.framework_type,
+                    "is_mandatory": row.is_mandatory,
+                }
+                for row in policy_rows
+            ],
+        },
+        "total": len(user_rows) + len(policy_rows),
+    }

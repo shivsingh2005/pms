@@ -1,56 +1,94 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.rbac import require_roles
 from app.database import get_db
-from app.models.enums import UserRole
+from app.models.checkin import Checkin
+from app.models.goal import Goal
+from app.models.rating import Rating
 from app.models.user import User
-from app.schemas.dashboard import EmployeeDashboardResponse, EmployeeTimelineResponse
-from app.schemas.timeline import CycleTimelineResponse
-from app.services.dashboard_service import DashboardService
-from app.services.timeline_service import TimelineService
 from app.utils.dependencies import get_current_user
 
-router = APIRouter(prefix="/employee", tags=["Employee Dashboard"])
+router = APIRouter(prefix="/employee-dashboard", tags=["Employee Dashboard"])
 
 
-@router.get("/dashboard", response_model=EmployeeDashboardResponse)
-async def get_employee_dashboard(
-    current_user: User = Depends(require_roles(UserRole.employee)),
-    db: AsyncSession = Depends(get_db),
-) -> EmployeeDashboardResponse:
-    payload = await DashboardService.employee_dashboard(current_user, db)
-    return EmployeeDashboardResponse(**payload)
+async def _build_employee_dashboard_metrics(db: AsyncSession, user_id) -> dict:
+    goals_result = await db.execute(
+        select(
+            func.count(Goal.id),
+            func.coalesce(func.avg(Goal.progress), 0.0),
+            func.count(Goal.id).filter(Goal.progress >= 100),
+        ).where(Goal.user_id == user_id)
+    )
+    goals_count, avg_progress, goals_completed = goals_result.one()
+
+    checkins_result = await db.execute(
+        select(func.count(Checkin.id)).where(Checkin.employee_id == user_id)
+    )
+    checkins_count = int(checkins_result.scalar() or 0)
+
+    rating_result = await db.execute(
+        select(func.coalesce(func.avg(Rating.rating), 0.0)).where(Rating.employee_id == user_id)
+    )
+    avg_rating = float(rating_result.scalar() or 0.0)
+
+    avg_progress_value = round(float(avg_progress or 0.0), 1)
+
+    return {
+        "goals_count": int(goals_count or 0),
+        "goals_completed": int(goals_completed or 0),
+        "avg_goal_progress": avg_progress_value,
+        "checkins_count": checkins_count,
+        "avg_rating": round(avg_rating, 2),
+        "consistency": avg_progress_value,
+    }
 
 
-@router.get("/timeline", response_model=EmployeeTimelineResponse)
-async def get_employee_timeline(
-    current_user: User = Depends(require_roles(UserRole.employee)),
-    db: AsyncSession = Depends(get_db),
-) -> EmployeeTimelineResponse:
-    items = await DashboardService.employee_timeline(current_user, db)
-    return EmployeeTimelineResponse(items=items)
-
-
-@router.get("/timeline/state", response_model=CycleTimelineResponse)
-async def get_cycle_timeline(
-    employeeId: str | None = None,
-    cycleId: str | None = None,
+@router.get("/overview")
+async def get_employee_dashboard_overview(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> CycleTimelineResponse:
-    target_user = current_user
+) -> dict:
+    metrics = await _build_employee_dashboard_metrics(db, current_user.id)
+    manager_name = None
+    manager_email = None
+    manager_title = None
 
-    if employeeId and employeeId != str(current_user.id):
-        if current_user.role not in {UserRole.manager, UserRole.hr, UserRole.leadership}:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to view another employee timeline")
-        row = await db.get(User, employeeId)
-        if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
-        target_user = row
+    if current_user.manager_id:
+        manager = await db.get(User, current_user.manager_id)
+        if manager and manager.organization_id == current_user.organization_id:
+            manager_name = manager.name
+            manager_email = manager.email
+            manager_title = manager.title
 
-    try:
-        payload = await TimelineService.get_or_create_cycle_timeline(target_user, cycleId, db)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return CycleTimelineResponse(**payload)
+    return {
+        "employee_id": str(current_user.id),
+        "goals_count": metrics["goals_count"],
+        "avg_goal_progress": metrics["avg_goal_progress"],
+        "checkins_count": metrics["checkins_count"],
+        "avg_rating": metrics["avg_rating"],
+        "manager_name": manager_name,
+        "manager_email": manager_email,
+        "manager_title": manager_title,
+    }
+
+
+@router.get("", include_in_schema=False)
+async def get_employee_dashboard_legacy_alias(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    metrics = await _build_employee_dashboard_metrics(db, current_user.id)
+
+    # Backward-compatible shape for clients still calling /api/v1/employee-dashboard
+    # instead of /api/v1/employee-dashboard/overview.
+    return {
+        "employee_id": str(current_user.id),
+        "overall_progress": metrics["avg_goal_progress"],
+        "goals_completed": metrics["goals_completed"],
+        "goals_count": metrics["goals_count"],
+        "total_checkins": metrics["checkins_count"],
+        "checkins_count": metrics["checkins_count"],
+        "consistency": metrics["consistency"],
+        "avg_rating": metrics["avg_rating"],
+    }

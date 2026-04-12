@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node -e \"const fs=require('fs'); for (const d of ['.next','.turbo']) { try { fs.rmSync(d,{recursive:true,force:true}); } catch {} }\"",
     "dev": "next dev",
+    "prebuild": "node -e \"const fs=require('fs'); for (const d of ['.next','.turbo']) { try { fs.rmSync(d,{recursive:true,force:true}); } catch {} }\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

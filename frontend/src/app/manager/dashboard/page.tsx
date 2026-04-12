@@ -1,5 +1,6 @@
-import { redirect } from "next/navigation";
+import { DashboardSkeleton } from "@/components/skeletons/DashboardSkeleton";
+import { ManagerDashboard } from "@/components/dashboard/ManagerDashboard";
 
-export default function ManagerDashboardRoute() {
-  redirect("/manager-dashboard");
+export default function Page() {
+  return <ManagerDashboard />;
 }

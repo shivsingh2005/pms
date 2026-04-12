@@ -5,6 +5,7 @@ import { dashboardService, type DashboardOverview } from "@/services/dashboard";
 import { checkinsService } from "@/services/checkins";
 import { hrService } from "@/services/hr";
 import type { HREmployeeDirectoryItem, HRManagerOption, HRMeeting, HROrgAnalytics, HROverview } from "@/types";
+import { fixed } from "@/lib/safe";
 
 export type LeadershipTimeRange = "week" | "month" | "quarter";
 
@@ -80,7 +81,7 @@ function promotionReadiness(entry: { progress: number; consistency: number; rati
 
 function finalRatingFromRecords(base: HREmployeeDirectoryItem, finalRating?: { average_rating: number; ratings_count: number }) {
   if (finalRating && finalRating.ratings_count > 0) {
-    return Number(finalRating.average_rating.toFixed(2));
+    return Number(fixed(finalRating.average_rating, 2));
   }
   return 0;
 }
@@ -279,7 +280,7 @@ export function useLeadershipPortalData(filters: LeadershipFilters) {
   const underperformingTrend = useMemo(() => {
     return orgProgressTrend.map((row) => ({
       period: row.period,
-      value: Number(Math.max(0, 70 - row.value).toFixed(1)),
+      value: Number(fixed(Math.max(0, 70 - row.value), 1)),
     }));
   }, [orgProgressTrend]);
 
@@ -301,7 +302,7 @@ export function useLeadershipPortalData(filters: LeadershipFilters) {
 
     return Array.from(buckets.entries()).map(([department, value]) => ({
       department,
-      value: value.count ? Number((value.sum / value.count).toFixed(1)) : 0,
+      value: value.count ? Number(fixed(value.sum / value.count, 1)) : 0,
     }));
   }, [state.employees, state.orgAnalytics]);
 
@@ -347,12 +348,13 @@ export function useLeadershipPortalData(filters: LeadershipFilters) {
   }, [state.hrOverview]);
 
   const goalCompletionRate = useMemo(() => {
-    if (state.overview?.kpi.cycle_completion !== undefined) {
-      return toPercent(state.overview.kpi.cycle_completion);
+    const kpi = state.overview?.kpi;
+    if (kpi?.cycle_completion !== undefined) {
+      return toPercent(kpi.cycle_completion);
     }
 
-    const totalGoals = Number(state.overview?.kpi.total_goals ?? 0);
-    const completedGoals = Number(state.overview?.kpi.goals_completed ?? 0);
+    const totalGoals = Number(kpi?.total_goals ?? 0);
+    const completedGoals = Number(kpi?.goals_completed ?? 0);
     return totalGoals > 0 ? toPercent((completedGoals / totalGoals) * 100) : 0;
   }, [state.overview]);
 
@@ -376,7 +378,7 @@ export function useLeadershipPortalData(filters: LeadershipFilters) {
       .sort((a, b) => b.score - a.score)[0];
 
     return [
-      `Performance ${direction} by ${Math.abs(delta).toFixed(1)}% in the latest period.`,
+      `Performance ${direction} by ${fixed(Math.abs(delta), 1)}% in the latest period.`,
       `${attritionRiskCount} employees are in high attrition risk band.`,
       `${bestManager ? `${bestManager.name} team is performing best.` : "Manager effectiveness will appear as team data increases."}`,
       "Final rating follows check-in -> approved meeting -> manager rating, displayed as average of all recorded check-in ratings.",
@@ -401,9 +403,9 @@ export function useLeadershipPortalData(filters: LeadershipFilters) {
       managers: state.hrOverview?.total_managers ?? state.managers.length,
       atRisk: state.hrOverview?.at_risk_employees ?? atRiskEmployees.length,
       meetings: state.meetings.length,
-      goals: Number(state.overview?.kpi.total_goals ?? 0),
+      goals: Number(state.overview?.kpi?.total_goals ?? 0),
       checkins: state.ratedCheckinsCount,
-      avgPerformance: Number(state.hrOverview?.avg_org_performance ?? state.overview?.kpi.org_health ?? 0),
+      avgPerformance: Number(state.hrOverview?.avg_org_performance ?? state.overview?.kpi?.org_health ?? 0),
     };
   }, [atRiskEmployees.length, state]);
 

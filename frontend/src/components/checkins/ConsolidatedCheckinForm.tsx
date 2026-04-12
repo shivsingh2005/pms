@@ -4,6 +4,8 @@ import React, { useState, useEffect } from "react";
 import { useGoalsStore } from "@/store/useGoalsStore";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
+import { checkinsService } from "@/services/checkins";
+import { performanceCyclesService } from "@/services/performance-cycles";
 import type { Goal } from "@/types";
 import {
   AlertCircle,
@@ -18,6 +20,12 @@ interface GoalStatusUpdate {
   rag: "RED" | "AMBER" | "GREEN";
   progress: number;
 }
+
+const RAG_SEQUENCE: Record<GoalStatusUpdate["rag"], GoalStatusUpdate["rag"]> = {
+  RED: "AMBER",
+  AMBER: "GREEN",
+  GREEN: "RED",
+};
 
 /**
  * Consolidated Check-in Form
@@ -43,30 +51,58 @@ export function ConsolidatedCheckinForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [checkinsRemaining] = useState(3);
+  const [activeCycleId, setActiveCycleId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchGoals().catch(() => null);
   }, [fetchGoals]);
 
   useEffect(() => {
+    performanceCyclesService
+      .listCycles()
+      .then((payload) => {
+        const active = (payload.cycles || []).find(
+          (cycle) => String(cycle.status || "").toLowerCase() === "active"
+        );
+        setActiveCycleId(active?.id || null);
+      })
+      .catch(() => {
+        setActiveCycleId(null);
+      });
+  }, []);
+
+  useEffect(() => {
     // Pre-fill goal updates from last check-in (smart pre-filling)
-    const approvedGoals = goals.filter((g: Goal) => g.status === "approved");
+    const approvedGoals = goals.filter(
+      (g: Goal) => String(g.status || "").toLowerCase() === "approved"
+    );
+
+    // Prefer approved goals from the active cycle, but don't hide approved goals
+    // when cycle ids are absent or out of sync between endpoints.
+    const eligibleGoals = activeCycleId
+      ? (() => {
+          const activeCycleGoals = approvedGoals.filter(
+            (g: Goal) => String(g.cycle_id || "") === activeCycleId
+          );
+          return activeCycleGoals.length > 0 ? activeCycleGoals : approvedGoals;
+        })()
+      : approvedGoals;
+
     setGoalUpdates(
-      approvedGoals.map((g: Goal) => ({
+      eligibleGoals.map((g: Goal) => ({
         goalId: g.id,
         title: g.title,
         rag: "GREEN" as const,
         progress: g.progress || 0,
       }))
     );
-  }, [goals]);
+  }, [activeCycleId, goals]);
 
   const handleRagToggle = (goalId: string) => {
     setGoalUpdates((prev) =>
       prev.map((update) => {
         if (update.goalId === goalId) {
-          const ragSequence = { RED: "AMBER", AMBER: "GREEN", GREEN: "RED" };
-          return { ...update, rag: ragSequence[update.rag] as any };
+          return { ...update, rag: RAG_SEQUENCE[update.rag] };
         }
         return update;
       })
@@ -90,33 +126,35 @@ export function ConsolidatedCheckinForm() {
   const handleSubmit = async () => {
     setIsLoading(true);
     try {
-      // Submit consolidated check-in with all goal updates
-      const payload = {
-        goalUpdates,
-        overallSummary,
-        blockers: blockers || undefined,
-        nextPeriodPlan,
-        isFinal,
-        attachments,
-      };
+      const summary = overallSummary.trim() || nextPeriodPlan.trim();
+      if (!summary) {
+        alert("Please add your update before submitting.");
+        return;
+      }
 
-      // API call: POST /checkins (consolidated)
-      const response = await fetch("/api/v1/checkins", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+      const averageProgress = goalUpdates.length
+        ? Math.round(goalUpdates.reduce((sum, item) => sum + item.progress, 0) / goalUpdates.length)
+        : 0;
+
+      await checkinsService.submit({
+        overall_progress: averageProgress,
+        summary,
+        achievements: overallSummary.trim() || undefined,
+        blockers: blockers.trim() || undefined,
+        is_final: isFinal,
+        goal_updates: goalUpdates.map((item) => ({
+          goal_id: item.goalId,
+          progress: item.progress,
+          note: item.rag,
+        })),
       });
 
-      if (response.ok) {
-        alert("✅ Check-in submitted successfully!");
-        // Reset form or redirect
-        setGoalUpdates([]);
-        setOverallSummary("");
-        setBlockers("");
-        setNextPeriodPlan("");
-      } else {
-        alert("Error submitting check-in");
-      }
+      alert("✅ Check-in submitted successfully!");
+      // Reset form after successful submission.
+      setGoalUpdates([]);
+      setOverallSummary("");
+      setBlockers("");
+      setNextPeriodPlan("");
     } finally {
       setIsLoading(false);
     }
@@ -215,7 +253,7 @@ export function ConsolidatedCheckinForm() {
             <FileText className="h-5 w-5" />
             Your Update
           </CardTitle>
-          <CardDescription>3 fields only — focus on what's new</CardDescription>
+          <CardDescription>3 fields only — focus on what&apos;s new</CardDescription>
         </div>
         <div className="space-y-4">
           {/* Accomplishment */}

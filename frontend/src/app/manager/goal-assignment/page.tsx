@@ -1,0 +1,1 @@
+export { default } from "@/app/manager/goals-allotment/page";

@@ -1,27 +1,45 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.rbac import require_roles
 from app.database import get_db
-from app.models.enums import UserRole
+from app.models.performance_review import PerformanceReview
 from app.models.user import User
-from app.schemas.report import ReportGenerateRequest, ReportGenerateResponse
-from app.services.report_service import ReportService
+from app.utils.dependencies import get_current_user
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
 
-@router.post("/generate", response_model=ReportGenerateResponse)
-async def generate_report(
-    payload: ReportGenerateRequest,
-    current_user: User = Depends(require_roles(UserRole.manager, UserRole.hr, UserRole.leadership)),
+@router.get("")
+async def list_reports(
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ReportGenerateResponse:
-    report = await ReportService.generate(
-        current_user=current_user,
-        report_type=payload.report_type,
-        employee_id=payload.employee_id,
-        manager_id=payload.manager_id,
-        db=db,
+) -> dict:
+    result = await db.execute(
+        select(
+            PerformanceReview.cycle_year,
+            PerformanceReview.cycle_quarter,
+            func.count(PerformanceReview.id).label("reviews"),
+            func.coalesce(func.avg(PerformanceReview.overall_rating), 0.0).label("avg_rating"),
+        )
+        .join(User, PerformanceReview.employee_id == User.id)
+        .where(User.organization_id == current_user.organization_id)
+        .group_by(PerformanceReview.cycle_year, PerformanceReview.cycle_quarter)
+        .order_by(PerformanceReview.cycle_year.desc(), PerformanceReview.cycle_quarter.desc())
+        .limit(limit)
     )
-    return ReportGenerateResponse(**report)
+    rows = result.all()
+
+    return {
+        "reports": [
+            {
+                "cycle_year": row.cycle_year,
+                "cycle_quarter": row.cycle_quarter,
+                "reviews": int(row.reviews or 0),
+                "avg_rating": round(float(row.avg_rating or 0.0), 2),
+            }
+            for row in rows
+        ],
+        "total": len(rows),
+    }

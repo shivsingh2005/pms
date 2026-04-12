@@ -1,8 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 from uuid import UUID
 from fastapi import HTTPException, status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.cache import cache_get, cache_set
@@ -56,6 +56,60 @@ class MeetService:
                 return
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Meeting access denied")
 
+    @staticmethod
+    def _proposal_to_api_payload(proposal: MeetingProposal, meeting: Meeting) -> dict:
+        proposed_start_time = proposal.scheduled_at or meeting.start_time
+        meeting_duration = meeting.end_time - meeting.start_time
+        if meeting_duration.total_seconds() <= 0:
+            meeting_duration = timedelta(minutes=30)
+        proposed_end_time = proposed_start_time + meeting_duration
+
+        return {
+            "id": proposal.id,
+            "checkin_id": meeting.checkin_id,
+            "employee_id": meeting.employee_id,
+            "manager_id": meeting.manager_id,
+            "proposed_start_time": proposed_start_time,
+            "proposed_end_time": proposed_end_time,
+            "status": proposal.status,
+            "created_at": proposal.created_at,
+        }
+
+    @staticmethod
+    def _proposal_payload_from_values(
+        proposal_id: UUID | str,
+        checkin_id: UUID | str | None,
+        employee_id: UUID | str | None,
+        manager_id: UUID | str | None,
+        proposed_start_time: datetime,
+        proposed_end_time: datetime,
+        status_value: str,
+        created_at: datetime,
+    ) -> dict:
+        return {
+            "id": proposal_id,
+            "checkin_id": checkin_id,
+            "employee_id": employee_id,
+            "manager_id": manager_id,
+            "proposed_start_time": proposed_start_time,
+            "proposed_end_time": proposed_end_time,
+            "status": status_value,
+            "created_at": created_at,
+        }
+
+    async def _meeting_proposal_columns(self, db: AsyncSession) -> set[str]:
+        result = await db.execute(
+            text(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'meeting_proposals'
+                """
+            )
+        )
+        return {str(row[0]) for row in result.all()}
+
     async def get_availability(
         self,
         participants_emails: list[str],
@@ -88,6 +142,22 @@ class MeetService:
             if not linked_checkin:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Check-in not found")
             await ensure_cycle_writable(db, linked_checkin.cycle_id, locked_detail="Cannot create meeting in a locked cycle")
+
+        selected_goal_ids: list[UUID] = []
+        if meeting_type == MeetingType.CHECKIN and linked_checkin is not None:
+            allowed_goal_ids = set(linked_checkin.goal_ids or [])
+            requested_goal_ids = list(dict.fromkeys(payload.goal_ids or []))
+
+            if requested_goal_ids:
+                invalid_goal_ids = [goal_id for goal_id in requested_goal_ids if goal_id not in allowed_goal_ids]
+                if invalid_goal_ids:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="One or more selected goals are not linked to the selected check-in",
+                    )
+                selected_goal_ids = requested_goal_ids
+            else:
+                selected_goal_ids = list(allowed_goal_ids)
 
         goal: Goal | None = None
         if payload.goal_id is not None and meeting_type != MeetingType.CHECKIN:
@@ -191,12 +261,15 @@ class MeetService:
             employee_id=employee.id if employee else None,
             manager_id=manager.id if manager else None,
             meeting_type=meeting_type,
-            goal_id=goal.id if goal else None,
+            goal_id=goal.id if goal else (selected_goal_ids[0] if selected_goal_ids else None),
             start_time=payload.start_time,
             end_time=payload.end_time,
             google_event_id=google_event_id,
             meet_link=event.get("hangoutLink") or conference_uri,
             google_meet_link=event.get("hangoutLink") or conference_uri,
+            goal_discussion_notes={
+                "goal_ids": [str(goal_id) for goal_id in selected_goal_ids]
+            } if selected_goal_ids else {},
             participants=participants,
             status=MeetingStatus.scheduled,
         )
@@ -223,21 +296,77 @@ class MeetService:
         )
         return meeting
 
-    async def list_pending_proposals(self, current_user: User, db: AsyncSession) -> list[MeetingProposal]:
+    async def list_pending_proposals(self, current_user: User, db: AsyncSession) -> list[dict]:
         if current_user.role != UserRole.manager:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only managers can access meeting proposals")
 
-        result = await db.execute(
-            select(MeetingProposal)
-            .where(
-                MeetingProposal.manager_id == current_user.id,
-                MeetingProposal.status == MeetingProposalStatus.pending,
-            )
-            .order_by(MeetingProposal.created_at.desc())
-        )
-        return list(result.scalars().all())
+        columns = await self._meeting_proposal_columns(db)
 
-    async def approve_proposal(self, proposal_id: str, current_user: User, db: AsyncSession) -> tuple[MeetingProposal, Meeting]:
+        if "meeting_id" in columns:
+            result = await db.execute(
+                text(
+                    """
+                    SELECT
+                        mp.id,
+                        m.checkin_id,
+                        m.employee_id,
+                        m.manager_id,
+                        COALESCE(mp.scheduled_at, m.start_time) AS proposed_start_time,
+                        (COALESCE(mp.scheduled_at, m.start_time) + (m.end_time - m.start_time)) AS proposed_end_time,
+                        mp.status,
+                        mp.created_at
+                    FROM meeting_proposals mp
+                    JOIN meetings m ON m.id = mp.meeting_id
+                    WHERE m.manager_id = :manager_id
+                      AND mp.status = :proposal_status
+                    ORDER BY mp.created_at DESC
+                    """
+                ),
+                {
+                    "manager_id": current_user.id,
+                    "proposal_status": MeetingProposalStatus.pending.value,
+                },
+            )
+        else:
+            result = await db.execute(
+                text(
+                    """
+                    SELECT
+                        id,
+                        checkin_id,
+                        employee_id,
+                        manager_id,
+                        proposed_start_time,
+                        proposed_end_time,
+                        status,
+                        created_at
+                    FROM meeting_proposals
+                    WHERE manager_id = :manager_id
+                      AND status = :proposal_status
+                    ORDER BY created_at DESC
+                    """
+                ),
+                {
+                    "manager_id": current_user.id,
+                    "proposal_status": MeetingProposalStatus.pending.value,
+                },
+            )
+
+        return [
+            self._proposal_payload_from_values(
+                proposal_id=row["id"],
+                checkin_id=row["checkin_id"],
+                employee_id=row["employee_id"],
+                manager_id=row["manager_id"],
+                proposed_start_time=row["proposed_start_time"],
+                proposed_end_time=row["proposed_end_time"],
+                status_value=row["status"],
+                created_at=row["created_at"],
+            )
+            for row in result.mappings().all()
+        ]
+
+    async def approve_proposal(self, proposal_id: str, current_user: User, db: AsyncSession) -> tuple[dict, Meeting]:
         if current_user.role != UserRole.manager:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only managers can approve meeting proposals")
 
@@ -246,30 +375,89 @@ class MeetService:
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid proposal id") from exc
 
-        proposal = await db.get(MeetingProposal, proposal_uuid)
-        if not proposal:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting proposal not found")
+        columns = await self._meeting_proposal_columns(db)
+        is_new_schema = "meeting_id" in columns
 
-        if proposal.manager_id != current_user.id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to approve this proposal")
+        if is_new_schema:
+            proposal_result = await db.execute(
+                text(
+                    """
+                    SELECT
+                        mp.id,
+                        mp.status,
+                        mp.created_at,
+                        m.id AS meeting_id,
+                        m.checkin_id,
+                        m.employee_id,
+                        m.manager_id,
+                        COALESCE(mp.scheduled_at, m.start_time) AS proposed_start_time,
+                        (COALESCE(mp.scheduled_at, m.start_time) + (m.end_time - m.start_time)) AS proposed_end_time
+                    FROM meeting_proposals mp
+                    JOIN meetings m ON m.id = mp.meeting_id
+                    WHERE mp.id = :proposal_id
+                    """
+                ),
+                {"proposal_id": proposal_uuid},
+            )
+            proposal_row = proposal_result.mappings().first()
+            if not proposal_row:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting proposal not found")
+            if proposal_row["manager_id"] != current_user.id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to approve this proposal")
+            if proposal_row["status"] != MeetingProposalStatus.pending.value:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Proposal is not pending")
 
-        if proposal.status != MeetingProposalStatus.pending:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Proposal is not pending")
+            meeting = await db.get(Meeting, proposal_row["meeting_id"])
+            if not meeting:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Related meeting not found")
+        else:
+            proposal_result = await db.execute(
+                text(
+                    """
+                    SELECT
+                        id,
+                        checkin_id,
+                        employee_id,
+                        manager_id,
+                        proposed_start_time,
+                        proposed_end_time,
+                        status,
+                        created_at
+                    FROM meeting_proposals
+                    WHERE id = :proposal_id
+                    """
+                ),
+                {"proposal_id": proposal_uuid},
+            )
+            proposal_row = proposal_result.mappings().first()
+            if not proposal_row:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting proposal not found")
+            if proposal_row["manager_id"] != current_user.id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to approve this proposal")
+            if proposal_row["status"] != MeetingProposalStatus.pending.value:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Proposal is not pending")
 
-        checkin = await db.get(Checkin, proposal.checkin_id)
+            meeting = None
+
+        checkin_id = proposal_row["checkin_id"]
+        employee_id = proposal_row["employee_id"]
+        proposed_start_time = proposal_row["proposed_start_time"]
+        proposed_end_time = proposal_row["proposed_end_time"]
+
+        checkin = await db.get(Checkin, checkin_id) if checkin_id else None
         if not checkin:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Related check-in not found")
         await ensure_cycle_writable(db, checkin.cycle_id, locked_detail="Cannot approve proposal in a locked cycle")
 
-        employee = await db.get(User, proposal.employee_id)
+        employee = await db.get(User, employee_id) if employee_id else None
         if not employee:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
         if not employee.email or not current_user.email:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing participant email for scheduling")
 
-        start_iso = proposal.proposed_start_time.astimezone(timezone.utc).isoformat()
-        end_iso = proposal.proposed_end_time.astimezone(timezone.utc).isoformat()
+        start_iso = proposed_start_time.astimezone(timezone.utc).isoformat()
+        end_iso = proposed_end_time.astimezone(timezone.utc).isoformat()
 
         try:
             event = await self.calendar_service.client.create_event(
@@ -296,43 +484,92 @@ class MeetService:
         )
         meet_link = event.get("hangoutLink") or conference_uri
 
-        meeting = Meeting(
-            title=f"Check-in: {employee.name}",
-            description=f"Scheduled from manager approval for check-in {checkin.id}",
-            organizer_id=current_user.id,
-            checkin_id=checkin.id,
-            cycle_id=checkin.cycle_id,
-            employee_id=proposal.employee_id,
-            manager_id=proposal.manager_id,
-            meeting_type=MeetingType.CHECKIN,
-            goal_id=None,
-            start_time=proposal.proposed_start_time,
-            end_time=proposal.proposed_end_time,
-            google_event_id=google_event_id,
-            meet_link=meet_link,
-            google_meet_link=meet_link,
-            participants=[employee.email, current_user.email],
-            status=MeetingStatus.scheduled,
-        )
-        db.add(meeting)
+        if is_new_schema:
+            meeting.start_time = proposed_start_time
+            meeting.end_time = proposed_end_time
+            meeting.google_event_id = google_event_id
+            meeting.meet_link = meet_link
+            meeting.google_meet_link = meet_link
+            meeting.participants = [employee.email, current_user.email]
+            meeting.status = MeetingStatus.scheduled
+        else:
+            meeting = Meeting(
+                title=f"Check-in: {employee.name}",
+                description=f"Scheduled from manager approval for check-in {checkin.id}",
+                organizer_id=current_user.id,
+                checkin_id=checkin.id,
+                cycle_id=checkin.cycle_id,
+                employee_id=employee.id,
+                manager_id=current_user.id,
+                meeting_type=MeetingType.CHECKIN,
+                goal_id=None,
+                start_time=proposed_start_time,
+                end_time=proposed_end_time,
+                google_event_id=google_event_id,
+                meet_link=meet_link,
+                google_meet_link=meet_link,
+                participants=[employee.email, current_user.email],
+                status=MeetingStatus.scheduled,
+            )
+            db.add(meeting)
 
-        proposal.status = MeetingProposalStatus.approved
-        checkin.meeting_date = proposal.proposed_start_time
+        if is_new_schema:
+            await db.execute(
+                text(
+                    """
+                    UPDATE meeting_proposals
+                    SET status = :proposal_status,
+                        is_accepted = true
+                    WHERE id = :proposal_id
+                    """
+                ),
+                {
+                    "proposal_status": MeetingProposalStatus.approved.value,
+                    "proposal_id": proposal_uuid,
+                },
+            )
+        else:
+            await db.execute(
+                text(
+                    """
+                    UPDATE meeting_proposals
+                    SET status = :proposal_status
+                    WHERE id = :proposal_id
+                    """
+                ),
+                {
+                    "proposal_status": MeetingProposalStatus.approved.value,
+                    "proposal_id": proposal_uuid,
+                },
+            )
+
+        checkin.meeting_date = proposed_start_time
         checkin.meeting_link = meet_link
 
         await db.commit()
         await db.refresh(meeting)
-        await db.refresh(proposal)
         MeetService.logger.info(
             "Meeting proposal approved and meeting scheduled",
             extra={
-                "proposal_id": str(proposal.id),
+                "proposal_id": str(proposal_uuid),
                 "meeting_id": str(meeting.id),
                 "checkin_id": str(checkin.id),
                 "cycle_id": str(meeting.cycle_id) if meeting.cycle_id else None,
             },
         )
-        return proposal, meeting
+        return (
+            self._proposal_payload_from_values(
+                proposal_id=proposal_uuid,
+                checkin_id=checkin_id,
+                employee_id=employee_id,
+                manager_id=current_user.id,
+                proposed_start_time=proposed_start_time,
+                proposed_end_time=proposed_end_time,
+                status_value=MeetingProposalStatus.approved.value,
+                created_at=proposal_row["created_at"],
+            ),
+            meeting,
+        )
 
     async def reject_proposal(
         self,
@@ -340,7 +577,7 @@ class MeetService:
         current_user: User,
         db: AsyncSession,
         suggest_new_start_time: datetime | None = None,
-    ) -> MeetingProposal:
+    ) -> dict:
         if current_user.role != UserRole.manager:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only managers can reject meeting proposals")
 
@@ -349,26 +586,118 @@ class MeetService:
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid proposal id") from exc
 
-        proposal = await db.get(MeetingProposal, proposal_uuid)
-        if not proposal:
+        columns = await self._meeting_proposal_columns(db)
+        is_new_schema = "meeting_id" in columns
+
+        if is_new_schema:
+            proposal_result = await db.execute(
+                text(
+                    """
+                    SELECT
+                        mp.id,
+                        mp.status,
+                        mp.created_at,
+                        m.checkin_id,
+                        m.employee_id,
+                        m.manager_id,
+                        COALESCE(mp.scheduled_at, m.start_time) AS proposed_start_time,
+                        (COALESCE(mp.scheduled_at, m.start_time) + (m.end_time - m.start_time)) AS proposed_end_time
+                    FROM meeting_proposals mp
+                    JOIN meetings m ON m.id = mp.meeting_id
+                    WHERE mp.id = :proposal_id
+                    """
+                ),
+                {"proposal_id": proposal_uuid},
+            )
+        else:
+            proposal_result = await db.execute(
+                text(
+                    """
+                    SELECT
+                        id,
+                        status,
+                        created_at,
+                        checkin_id,
+                        employee_id,
+                        manager_id,
+                        proposed_start_time,
+                        proposed_end_time
+                    FROM meeting_proposals
+                    WHERE id = :proposal_id
+                    """
+                ),
+                {"proposal_id": proposal_uuid},
+            )
+
+        proposal_row = proposal_result.mappings().first()
+        if not proposal_row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting proposal not found")
 
-        if proposal.manager_id != current_user.id:
+        if proposal_row["manager_id"] != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to reject this proposal")
 
-        checkin = await db.get(Checkin, proposal.checkin_id)
+        checkin = await db.get(Checkin, proposal_row["checkin_id"]) if proposal_row["checkin_id"] else None
         if checkin:
             await ensure_cycle_writable(db, checkin.cycle_id, locked_detail="Cannot reject proposal in a locked cycle")
 
-        proposal.status = MeetingProposalStatus.rejected
+        update_start = proposal_row["proposed_start_time"]
+        update_end = proposal_row["proposed_end_time"]
         if suggest_new_start_time is not None:
-            duration = proposal.proposed_end_time - proposal.proposed_start_time
-            proposal.proposed_start_time = suggest_new_start_time
-            proposal.proposed_end_time = suggest_new_start_time + duration
+            duration = update_end - update_start
+            if duration.total_seconds() <= 0:
+                duration = timedelta(minutes=30)
+            update_start = suggest_new_start_time
+            update_end = suggest_new_start_time + duration
+
+        if is_new_schema:
+            await db.execute(
+                text(
+                    """
+                    UPDATE meeting_proposals
+                    SET status = :proposal_status,
+                        is_accepted = false,
+                        scheduled_at = :scheduled_at,
+                        reason = :reason
+                    WHERE id = :proposal_id
+                    """
+                ),
+                {
+                    "proposal_status": MeetingProposalStatus.rejected.value,
+                    "scheduled_at": update_start,
+                    "reason": "Manager suggested a new slot" if suggest_new_start_time is not None else None,
+                    "proposal_id": proposal_uuid,
+                },
+            )
+        else:
+            await db.execute(
+                text(
+                    """
+                    UPDATE meeting_proposals
+                    SET status = :proposal_status,
+                        proposed_start_time = :proposed_start_time,
+                        proposed_end_time = :proposed_end_time
+                    WHERE id = :proposal_id
+                    """
+                ),
+                {
+                    "proposal_status": MeetingProposalStatus.rejected.value,
+                    "proposed_start_time": update_start,
+                    "proposed_end_time": update_end,
+                    "proposal_id": proposal_uuid,
+                },
+            )
 
         await db.commit()
-        await db.refresh(proposal)
-        return proposal
+        return self._proposal_payload_from_values(
+            proposal_id=proposal_uuid,
+            checkin_id=proposal_row["checkin_id"],
+            employee_id=proposal_row["employee_id"],
+            manager_id=proposal_row["manager_id"],
+            proposed_start_time=update_start,
+            proposed_end_time=update_end,
+            status_value=MeetingProposalStatus.rejected.value,
+            created_at=proposal_row["created_at"],
+        )
 
     async def reschedule_proposal(
         self,
@@ -377,7 +706,7 @@ class MeetService:
         db: AsyncSession,
         proposed_start_time: datetime,
         proposed_end_time: datetime,
-    ) -> MeetingProposal:
+    ) -> dict:
         if current_user.role != UserRole.manager:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only managers can reschedule meeting proposals")
 
@@ -389,26 +718,103 @@ class MeetService:
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid proposal id") from exc
 
-        proposal = await db.get(MeetingProposal, proposal_uuid)
-        if not proposal:
+        columns = await self._meeting_proposal_columns(db)
+        is_new_schema = "meeting_id" in columns
+
+        if is_new_schema:
+            proposal_result = await db.execute(
+                text(
+                    """
+                    SELECT
+                        mp.id,
+                        mp.status,
+                        mp.created_at,
+                        m.checkin_id,
+                        m.employee_id,
+                        m.manager_id
+                    FROM meeting_proposals mp
+                    JOIN meetings m ON m.id = mp.meeting_id
+                    WHERE mp.id = :proposal_id
+                    """
+                ),
+                {"proposal_id": proposal_uuid},
+            )
+        else:
+            proposal_result = await db.execute(
+                text(
+                    """
+                    SELECT
+                        id,
+                        status,
+                        created_at,
+                        checkin_id,
+                        employee_id,
+                        manager_id
+                    FROM meeting_proposals
+                    WHERE id = :proposal_id
+                    """
+                ),
+                {"proposal_id": proposal_uuid},
+            )
+
+        proposal_row = proposal_result.mappings().first()
+        if not proposal_row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting proposal not found")
 
-        if proposal.manager_id != current_user.id:
+        if proposal_row["manager_id"] != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to reschedule this proposal")
 
-        if proposal.status != MeetingProposalStatus.pending:
+        if proposal_row["status"] != MeetingProposalStatus.pending.value:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only pending proposals can be rescheduled")
 
-        checkin = await db.get(Checkin, proposal.checkin_id)
+        checkin = await db.get(Checkin, proposal_row["checkin_id"]) if proposal_row["checkin_id"] else None
         if checkin:
             await ensure_cycle_writable(db, checkin.cycle_id, locked_detail="Cannot reschedule proposal in a locked cycle")
 
-        proposal.proposed_start_time = proposed_start_time
-        proposal.proposed_end_time = proposed_end_time
+        if is_new_schema:
+            await db.execute(
+                text(
+                    """
+                    UPDATE meeting_proposals
+                    SET scheduled_at = :scheduled_at,
+                        reason = :reason
+                    WHERE id = :proposal_id
+                    """
+                ),
+                {
+                    "scheduled_at": proposed_start_time,
+                    "reason": f"Rescheduled by manager to end at {proposed_end_time.isoformat()}",
+                    "proposal_id": proposal_uuid,
+                },
+            )
+        else:
+            await db.execute(
+                text(
+                    """
+                    UPDATE meeting_proposals
+                    SET proposed_start_time = :proposed_start_time,
+                        proposed_end_time = :proposed_end_time
+                    WHERE id = :proposal_id
+                    """
+                ),
+                {
+                    "proposed_start_time": proposed_start_time,
+                    "proposed_end_time": proposed_end_time,
+                    "proposal_id": proposal_uuid,
+                },
+            )
 
         await db.commit()
-        await db.refresh(proposal)
-        return proposal
+        return self._proposal_payload_from_values(
+            proposal_id=proposal_uuid,
+            checkin_id=proposal_row["checkin_id"],
+            employee_id=proposal_row["employee_id"],
+            manager_id=proposal_row["manager_id"],
+            proposed_start_time=proposed_start_time,
+            proposed_end_time=proposed_end_time,
+            status_value=MeetingProposalStatus.pending.value,
+            created_at=proposal_row["created_at"],
+        )
 
     async def list_meetings(self, current_user: User, db: AsyncSession) -> list[Meeting]:
         stmt = select(Meeting)

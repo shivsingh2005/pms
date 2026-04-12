@@ -2,12 +2,18 @@ import { api } from "@/services/api";
 import type {
   AnnualOperatingPlanItem,
   DepartmentFrameworkPolicy,
+  PerformanceCyclesListResponse,
   FrameworkRecommendation,
   FrameworkSelection,
   KPILibraryItem,
 } from "@/types";
 
 export const performanceCyclesService = {
+  async listCycles() {
+    const { data } = await api.get<PerformanceCyclesListResponse>("/performance-cycles");
+    return data;
+  },
+
   async recommendFramework(payload: { role: string; department?: string }) {
     const { data } = await api.get<FrameworkRecommendation>("/performance-cycles/framework/recommend", {
       params: {

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { PageHeader } from "@/components/ui/page-header";
 import { HRDashboard } from "@/components/dashboard/HRDashboard";
+import { DashboardError } from "@/components/ui/DashboardError";
 import { useSessionStore } from "@/store/useSessionStore";
 
 export default function HRDashboardPage() {
@@ -25,7 +26,9 @@ export default function HRDashboardPage() {
         title="HR Dashboard"
         description="Snapshot for org health and urgent people actions. Use HR Analytics for trends and deep dive charts."
       />
-      <HRDashboard />
+      <DashboardError name="HRDashboard">
+        <HRDashboard />
+      </DashboardError>
     </motion.div>
   );
 }

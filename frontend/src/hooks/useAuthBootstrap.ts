@@ -16,22 +16,23 @@ export function useAuthBootstrap() {
       try {
         setAuthLoading(true);
 
-        const token = authCookies.getToken();
+        const token = authCookies.getToken() ?? localStorage.getItem("pms_token");
         if (!token) {
-          const storedUser = localStorage.getItem("user");
+          const storedUser = localStorage.getItem("pms_user") ?? localStorage.getItem("user");
           if (storedUser) {
             try {
               const parsed = JSON.parse(storedUser);
               if (!cancelled) {
                 setUser(parsed);
-                localStorage.setItem(
-                  "session",
-                  JSON.stringify({ userId: parsed.id, email: parsed.email, role: parsed.role }),
-                );
+                localStorage.setItem("pms_user", JSON.stringify(parsed));
+                localStorage.setItem("user", JSON.stringify(parsed));
+                localStorage.setItem("session", JSON.stringify({ userId: parsed.id, email: parsed.email, role: parsed.role }));
               }
             } catch {
               if (!cancelled) {
                 setUser(null);
+                localStorage.removeItem("pms_user");
+                localStorage.removeItem("pms_token");
                 localStorage.removeItem("user");
                 localStorage.removeItem("session");
               }
@@ -51,6 +52,7 @@ export function useAuthBootstrap() {
           const user = await authService.me();
           if (!cancelled) {
             setUser(user);
+            localStorage.setItem("pms_user", JSON.stringify(user));
             localStorage.setItem("user", JSON.stringify(user));
             localStorage.setItem("session", JSON.stringify({ userId: user.id, email: user.email, role: user.role }));
           }
@@ -58,6 +60,8 @@ export function useAuthBootstrap() {
           if (!cancelled) {
             authCookies.clearToken();
             setUser(null);
+            localStorage.removeItem("pms_user");
+            localStorage.removeItem("pms_token");
             localStorage.removeItem("user");
             localStorage.removeItem("session");
           }

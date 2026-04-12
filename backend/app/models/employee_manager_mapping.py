@@ -1,22 +1,20 @@
 from datetime import datetime
-
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Float, UniqueConstraint, func
+from sqlalchemy import String, DateTime, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
-from app.models.base import Base, UUIDMixin
 
+class EmployeeManagerMapping(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "employee_manager_mappings"
 
-class EmployeeManagerMapping(Base, UUIDMixin):
-    __tablename__ = "employee_manager_mapping"
-
-    employee_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    manager_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    weight_percentage: Mapped[float] = mapped_column(Float, nullable=False)
-    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("employee_id", "manager_id", name="uq_employee_manager_mapping_employee_manager"),
-        CheckConstraint("weight_percentage > 0 AND weight_percentage <= 100", name="ck_employee_manager_weight_range"),
-    )
+    employee_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    manager_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    organization_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    effective_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    
+    employee = relationship("User", foreign_keys=[employee_id])
+    manager = relationship("User", foreign_keys=[manager_id])
+    organization = relationship("Organization")

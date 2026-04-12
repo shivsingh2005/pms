@@ -7,11 +7,11 @@ import { Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { authService } from "@/services/auth";
 import { authCookies } from "@/lib/cookies";
-import { useSessionStore } from "@/store/useSessionStore";
-import { resolveDefaultRouteForRole } from "@/lib/role-access";
+import { useAuth } from "@/context/AuthContext";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { User } from "@/types";
 
 function normalizeLoginEmail(email: string): string | null {
   const trimmed = email.trim().toLowerCase();
@@ -26,16 +26,23 @@ export default function HomePage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const user = useSessionStore((state) => state.user);
-  const setUser = useSessionStore((state) => state.setUser);
-  const logout = useSessionStore((state) => state.logout);
+  const { user, login, logout } = useAuth();
 
   useEffect(() => {
     if (!user) {
       return;
     }
 
-    router.replace(resolveDefaultRouteForRole(user.role));
+    // User is already authenticated, redirect to their dashboard
+    const roleRoutes: Record<string, string> = {
+      employee: "/employee-dashboard",
+      manager: "/manager-dashboard",
+      hr: "/hr/dashboard",
+      leadership: "/leadership/org-dashboard",
+    };
+
+    const targetRoute = roleRoutes[user.role] || "/unauthorized";
+    router.replace(targetRoute);
   }, [router, user]);
 
   return (
@@ -74,25 +81,31 @@ export default function HomePage() {
 
                   const token = await authService.login({ email: normalizedEmail });
 
-                  // Reset in-memory session state before applying the new login response.
-                  logout();
-                  authCookies.clearToken();
-                  authCookies.clearRefreshToken();
-
+                  // Store tokens in cookies
                   authCookies.setToken(token.access_token);
                   authCookies.setRefreshToken(token.refresh_token);
 
+                  // Get user data from /me endpoint
                   const me = await authService.me();
-                  setUser(me);
-                  localStorage.setItem("user", JSON.stringify(me));
-                  localStorage.setItem(
-                    "session",
-                    JSON.stringify({
-                      userId: me.id,
-                      email: me.email,
-                      role: me.role,
-                    }),
-                  );
+
+                  // Prepare user data for AuthContext
+                  const userData: User = {
+                    id: me.id,
+                    name: me.name,
+                    email: me.email,
+                    role: me.role.toLowerCase() as User["role"],
+                    roles: Array.isArray(me.roles)
+                      ? (me.roles.map((role) => String(role).toLowerCase()) as User["roles"])
+                      : ([String(me.role).toLowerCase()] as User["roles"]),
+                    organization_id: me.organization_id ?? "",
+                    title: me.title ?? null,
+                    department: me.department ?? null,
+                    manager_id: me.manager_id ?? null,
+                  };
+
+                  // Use AuthContext login (which handles localStorage and routing)
+                  login(userData, token.access_token);
+
                   toast.success(`Welcome back, ${me.name}`);
 
                   // Smooth OAuth onboarding: if Google is not connected yet, start OAuth right after app sign-in.
@@ -108,9 +121,17 @@ export default function HomePage() {
                   } catch {
                     // If Google OAuth cannot be initialized, continue with app sign-in session.
                   }
-
-                  const targetRoute = resolveDefaultRouteForRole(me.role);
-                  router.replace(targetRoute);
+                } catch (error: unknown) {
+                  console.error("Login failed:", error);
+                  const message =
+                    typeof error === "object" &&
+                    error !== null &&
+                    "message" in error &&
+                    typeof (error as { message?: unknown }).message === "string"
+                      ? (error as { message: string }).message
+                      : "Login failed. Please try again.";
+                  toast.error(message);
+                  logout();
                 } finally {
                   setLoading(false);
                 }

@@ -21,12 +21,12 @@ class AuthService:
     @staticmethod
     def _infer_role_from_email(email: str) -> UserRole:
         local_part = email.split("@")[0].strip().lower()
+        if any(token in local_part for token in ("executive", "leadership", "admin", "director")):
+            return UserRole.leadership
         if any(token in local_part for token in ("manager", "mgr", "lead")):
             return UserRole.manager
         if "hr" in local_part or "people" in local_part:
             return UserRole.hr
-        if any(token in local_part for token in ("executive", "leadership", "admin", "director")):
-            return UserRole.leadership
         return UserRole.employee
 
     @staticmethod

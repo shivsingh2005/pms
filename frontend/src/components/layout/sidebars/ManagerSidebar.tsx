@@ -1,0 +1,1 @@
+export { ManagerSidebar as default } from "@/components/navigation/ManagerSidebar";

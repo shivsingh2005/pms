@@ -16,6 +16,7 @@ interface MeetingsState {
       participants: string[];
       checkin_id?: string;
       goal_id?: string;
+      goal_ids?: string[];
     }
   ) => Promise<void>;
 }

@@ -1,5 +1,13 @@
-import { redirect } from "next/navigation";
+import dynamic from "next/dynamic";
+import { Suspense } from "react";
+import { DashboardSkeleton } from "@/components/skeletons/DashboardSkeleton";
 
-export default function EmployeeCheckinsRoute() {
-  redirect("/checkins");
+const PageView = dynamic(() => import("@/app/checkins/page"), { ssr: false });
+
+export default function Page() {
+  return (
+    <Suspense fallback={<DashboardSkeleton />}>
+      <PageView />
+    </Suspense>
+  );
 }

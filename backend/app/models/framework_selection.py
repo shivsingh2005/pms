@@ -1,29 +1,30 @@
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
-from sqlalchemy.orm import Mapped, mapped_column
-
+from datetime import datetime
+from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class UserFrameworkSelection(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "user_framework_selections"
 
-    user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
-    organization_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
-    selected_framework: Mapped[str] = mapped_column(String, nullable=False)
-    cycle_type: Mapped[str] = mapped_column(String, nullable=False, default="quarterly")
-    recommendation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    cycle_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("performance_cycles.id"), nullable=False, index=True)
+    framework_type: Mapped[str] = mapped_column(String, nullable=False)
+    is_selected: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    
+    user = relationship("User")
+    cycle = relationship("PerformanceCycle")
 
 
 class DepartmentFrameworkPolicy(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "department_framework_policies"
 
-    organization_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
-    department: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    allowed_frameworks: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
-    cycle_type: Mapped[str] = mapped_column(String, nullable=False, default="quarterly")
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
-    __table_args__ = (
-        UniqueConstraint("organization_id", "department", name="uq_department_framework_policies_org_department"),
-    )
+    organization_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
+    cycle_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("performance_cycles.id"), nullable=False, index=True)
+    department: Mapped[str] = mapped_column(String, nullable=False)
+    framework_type: Mapped[str] = mapped_column(String, nullable=False)
+    is_mandatory: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    
+    organization = relationship("Organization")
+    cycle = relationship("PerformanceCycle")

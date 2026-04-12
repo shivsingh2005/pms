@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 import logging
+from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.google.calendar_client import GoogleCalendarAPIError, GoogleCalendarAuthError
 from app.integrations.google.calendar_service import CalendarService
@@ -14,7 +15,7 @@ from app.models.goal import Goal
 from app.models.meeting import Meeting
 from app.models.meeting_proposal import MeetingProposal
 from app.models.performance_cycle import PerformanceCycle
-from app.models.enums import CheckinStatus, GoalStatus, MeetingProposalStatus, MeetingStatus, UserRole
+from app.models.enums import CheckinStatus, GoalStatus, MeetingProposalStatus, MeetingStatus, PerformanceCycleStatus, UserRole
 from app.models.user import User
 from app.services.cycle_guard import ensure_cycle_writable
 from app.schemas.checkin import CheckinRateRequest, CheckinReviewUpdate, CheckinSubmit, CheckinTranscriptIngestRequest
@@ -112,7 +113,7 @@ class CheckinService:
             select(PerformanceCycle)
             .where(
                 PerformanceCycle.organization_id == current_user.organization_id,
-                PerformanceCycle.is_active.is_(True),
+                cast(PerformanceCycle.status, String) == PerformanceCycleStatus.active.value,
             )
             .order_by(PerformanceCycle.start_date.desc())
             .limit(1)
@@ -147,6 +148,16 @@ class CheckinService:
             .order_by(Goal.created_at.asc())
         )
         goals = list(goals_result.scalars().all())
+        if not goals:
+            fallback_goals_result = await db.execute(
+                select(Goal)
+                .where(
+                    Goal.user_id == current_user.id,
+                    Goal.status == GoalStatus.approved,
+                )
+                .order_by(Goal.created_at.asc())
+            )
+            goals = list(fallback_goals_result.scalars().all())
         if not goals:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Check-ins are blocked until goals are approved")
 
@@ -205,14 +216,6 @@ class CheckinService:
         db.add(checkin)
         await db.flush()
 
-        proposal = MeetingProposal(
-            checkin_id=checkin.id,
-            employee_id=current_user.id,
-            manager_id=current_user.manager_id,
-            proposed_start_time=proposed_start,
-            proposed_end_time=proposed_end,
-        )
-        db.add(proposal)
         await db.commit()
         await db.refresh(checkin)
 
@@ -409,14 +412,19 @@ class CheckinService:
         if current_user.role == UserRole.employee:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employees cannot view ratings")
 
+        try:
+            employee_uuid = UUID(str(employee_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid employee id") from exc
+
         if current_user.role == UserRole.manager:
-            employee = await db.get(User, employee_id)
+            employee = await db.get(User, employee_uuid)
             if not employee or employee.manager_id != current_user.id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to view this final rating")
 
         result = await db.execute(
             select(func.coalesce(func.avg(CheckinRating.rating), 0), func.count(CheckinRating.id)).where(
-                CheckinRating.employee_id == employee_id
+                CheckinRating.employee_id == employee_uuid
             )
         )
         avg_value, count_value = result.one()
@@ -427,14 +435,26 @@ class CheckinService:
         if current_user.role == UserRole.employee:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employees cannot view ratings")
 
-        unique_employee_ids = list(dict.fromkeys(employee_ids))
+        unique_employee_ids = list(dict.fromkeys(str(employee_id) for employee_id in employee_ids if employee_id))
+        valid_employee_ids: list[UUID] = []
+        for employee_id in unique_employee_ids:
+            try:
+                valid_employee_ids.append(UUID(employee_id))
+            except ValueError:
+                continue
+
         if not unique_employee_ids:
             return {}
 
+        if not valid_employee_ids:
+            return {employee_id: (0.0, 0) for employee_id in unique_employee_ids}
+
+        valid_employee_id_strings = {str(item) for item in valid_employee_ids}
+
         if current_user.role == UserRole.manager:
-            employees_result = await db.execute(select(User.id, User.manager_id).where(User.id.in_(unique_employee_ids)))
+            employees_result = await db.execute(select(User.id, User.manager_id).where(User.id.in_(valid_employee_ids)))
             allowed_ids = {str(employee_id) for employee_id, manager_id in employees_result.all() if manager_id == current_user.id}
-            denied_ids = [employee_id for employee_id in unique_employee_ids if employee_id not in allowed_ids]
+            denied_ids = [employee_id for employee_id in unique_employee_ids if employee_id in valid_employee_id_strings and employee_id not in allowed_ids]
             if denied_ids:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to view one or more requested final ratings")
 
@@ -444,7 +464,7 @@ class CheckinService:
                 func.coalesce(func.avg(CheckinRating.rating), 0),
                 func.count(CheckinRating.id),
             )
-            .where(CheckinRating.employee_id.in_(unique_employee_ids))
+            .where(CheckinRating.employee_id.in_(valid_employee_ids))
             .group_by(CheckinRating.employee_id)
         )
 

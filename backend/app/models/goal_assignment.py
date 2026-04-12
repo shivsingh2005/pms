@@ -1,19 +1,21 @@
 from datetime import datetime
-
-from sqlalchemy import DateTime, Float, ForeignKey, String, func
+from sqlalchemy import String, Float, Boolean, DateTime, ForeignKey, Enum
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.models.enums import GoalStatus
 
-from app.models.base import Base, UUIDMixin
 
-
-class GoalAssignment(Base, UUIDMixin):
+class GoalAssignment(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "goal_assignments"
 
-    goal_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("goals.id", ondelete="CASCADE"), nullable=False, index=True)
-    employee_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    manager_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    role_key: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    weight: Mapped[float] = mapped_column(Float, nullable=False)
-    status: Mapped[str] = mapped_column(String, nullable=False, default="assigned", index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    goal_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("goals.id"), nullable=False, index=True)
+    assigned_to_user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    assigned_by_user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    status: Mapped[GoalStatus] = mapped_column(Enum(GoalStatus, name="goal_status"), default=GoalStatus.draft, nullable=False)
+    weightage: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    
+    goal = relationship("Goal")
+    assigned_to = relationship("User", foreign_keys=[assigned_to_user_id])
+    assigned_by = relationship("User", foreign_keys=[assigned_by_user_id])

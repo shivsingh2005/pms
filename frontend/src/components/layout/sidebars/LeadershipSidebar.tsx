@@ -1,0 +1,1 @@
+export { LeadershipSidebar as default } from "@/components/navigation/LeadershipSidebar";

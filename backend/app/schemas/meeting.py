@@ -17,6 +17,7 @@ class MeetingCreateRequest(BaseModel):
     participants: list[str] = Field(default_factory=list)
     checkin_id: UUID | None = None
     goal_id: UUID | None = None
+    goal_ids: list[UUID] = Field(default_factory=list)
     employee_id: UUID | None = None
     manager_id: UUID | None = None
 
@@ -74,9 +75,9 @@ class MeetingAISummaryResponse(BaseModel):
 
 class MeetingProposalOut(BaseModel):
     id: UUID
-    checkin_id: UUID
-    employee_id: UUID
-    manager_id: UUID
+    checkin_id: UUID | None = None
+    employee_id: UUID | None = None
+    manager_id: UUID | None = None
     proposed_start_time: datetime
     proposed_end_time: datetime
     status: MeetingProposalStatus

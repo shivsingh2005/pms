@@ -12,7 +12,7 @@ from app.core.logging_middleware import RequestLoggingMiddleware
 from app.core.rate_limit import limiter
 from app.core.response_middleware import ResponseEnvelopeMiddleware
 from app.core.security_headers import SecurityHeadersMiddleware
-from app.routers import auth, users, organizations, goals, checkins, ratings, reviews, ai_router, meetings_router, hr, employees, performance_cycles, dashboard, manager, employee_dashboard, framework, notifications, reports, goal_cascade
+from app.routers import auth, users, organizations, goals, checkins, ratings, reviews, ai_router, meetings_router, hr, employees, performance_cycles, dashboard, manager, employee_dashboard, employee_legacy_dashboard, leadership, framework, notifications, reports, goal_cascade, forms, compat
 
 settings = get_settings()
 
@@ -52,10 +52,14 @@ app.include_router(performance_cycles.router, prefix=settings.API_PREFIX)
 app.include_router(dashboard.router, prefix=settings.API_PREFIX)
 app.include_router(manager.router, prefix=settings.API_PREFIX)
 app.include_router(employee_dashboard.router, prefix=settings.API_PREFIX)
+app.include_router(employee_legacy_dashboard.router, prefix=settings.API_PREFIX)
+app.include_router(leadership.router, prefix=settings.API_PREFIX)
 app.include_router(framework.router, prefix=settings.API_PREFIX)
 app.include_router(notifications.router, prefix=settings.API_PREFIX)
 app.include_router(reports.router, prefix=settings.API_PREFIX)
 app.include_router(goal_cascade.router, prefix=settings.API_PREFIX)
+app.include_router(forms.router, prefix=settings.API_PREFIX)
+app.include_router(compat.router, prefix=settings.API_PREFIX)
 
 
 @app.get("/health")

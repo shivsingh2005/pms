@@ -11,7 +11,7 @@ const hrNavItems = [
   { href: "/hr/employee-directory", label: "Employee Directory", icon: Users },
   { href: "/hr/analytics", label: "Analytics", icon: BarChartHorizontal },
   { href: "/hr/calibration", label: "Calibration", icon: Trophy },
-  { href: "/meetings", label: "Meetings", icon: Video },
+  { href: "/hr/meetings", label: "Meetings", icon: Video },
   { href: "/hr/reports", label: "Reports", icon: FileText },
 ] as const;
 

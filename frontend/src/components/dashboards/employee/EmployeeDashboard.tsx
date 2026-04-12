@@ -1,0 +1,1 @@
+export { EmployeeDashboard as default } from "@/components/dashboard/EmployeeDashboard";

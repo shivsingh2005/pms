@@ -71,7 +71,7 @@ export default function HRReportsPage() {
     <div className="space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold text-foreground">Reports</h1>
-        <p className="text-sm text-muted-foreground">Generate employee/team/org reports and manage HR meeting summaries.</p>
+        <p className="text-sm text-muted-foreground">Generate employee/team/organization reports and manage HR meeting summaries.</p>
       </div>
 
       <Card>
@@ -85,7 +85,7 @@ export default function HRReportsPage() {
           >
             <option value="employee">Employee report</option>
             <option value="team">Team report</option>
-            <option value="org">Org report</option>
+            <option value="org">Organization report</option>
           </select>
           <Button onClick={() => generate().catch(() => null)}>Generate Report</Button>
           <Button variant="outline" onClick={exportCsv} disabled={!report}>Export CSV</Button>

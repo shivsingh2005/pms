@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { dashboardService } from "@/services/dashboard";
@@ -36,36 +37,37 @@ interface NextActionData {
  */
 export function WhatsNextBanner() {
   const user = useSessionStore((state) => state.user);
-  const [nextAction, setNextAction] = useState<NextActionData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const canShowNextAction = Boolean(user?.id) && user?.role !== "hr" && user?.role !== "leadership";
 
-  useEffect(() => {
-    void fetchNextAction();
-  }, []);
-
-  const fetchNextAction = async () => {
-    try {
+  const nextActionQuery = useQuery({
+    queryKey: ["dashboard-next-action", user?.id],
+    enabled: canShowNextAction,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    queryFn: async () => {
       const data = await dashboardService.getNextAction();
-      setNextAction({
+
+      return {
         action: data.action_label?.toLowerCase().replaceAll(" ", "_") || "on_track",
         message: data.detail || data.title,
         priority: data.level === "critical" ? "high" : data.level === "warning" ? "medium" : "low",
         cta: data.action_label || "Open",
         url: data.action_url || null,
-      });
-    } catch (error) {
-      console.error("Failed to fetch next action:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+      } satisfies NextActionData;
+    },
+  });
+
+  const nextAction = nextActionQuery.data ?? null;
 
   // HR and leadership portals do not use performance cycle "next action" nudges.
   if (user?.role === "hr" || user?.role === "leadership") {
     return null;
   }
 
-  if (loading || !nextAction) {
+  if (nextActionQuery.isLoading || !nextAction) {
     return null;
   }
 

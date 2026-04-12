@@ -1,0 +1,1 @@
+export { HRDashboard as default } from "@/components/dashboard/HRDashboard";

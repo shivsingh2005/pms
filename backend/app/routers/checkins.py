@@ -97,7 +97,7 @@ async def get_employee_final_ratings_bulk(
     db: AsyncSession = Depends(get_db),
 ) -> EmployeeFinalRatingsResponse:
     ratings = await CheckinService.get_employee_final_ratings_bulk(
-        [str(employee_id) for employee_id in payload.employee_ids],
+        [employee_id for employee_id in payload.employee_ids],
         current_user,
         db,
     )

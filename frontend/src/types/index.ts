@@ -28,6 +28,7 @@ export interface DashboardNextAction {
 
 export interface Goal {
   id: string;
+  cycle_id?: string | null;
   user_id: string;
   assigned_by?: string | null;
   assigned_to?: string | null;
@@ -49,6 +50,21 @@ export interface Goal {
   withdrawn_at?: string | null;
   last_action_by?: string | null;
   created_at: string;
+}
+
+export interface PerformanceCycleRecord {
+  id: string;
+  name: string;
+  description?: string | null;
+  start_date: string;
+  end_date: string;
+  status: "planning" | "active" | "closed" | "locked" | string;
+  is_locked: boolean;
+}
+
+export interface PerformanceCyclesListResponse {
+  cycles: PerformanceCycleRecord[];
+  total: number;
 }
 
 export interface GoalApprovalHistory {
@@ -242,6 +258,61 @@ export interface AIGeneratedGoal {
   weightage: number;
 }
 
+export interface AIGoalClusterDetectRequest {
+  goal_title: string;
+  goal_description: string;
+  goal_kpi: string;
+  employee_role: string;
+  employee_department: string;
+  employee_function: string;
+}
+
+export interface AIGoalClusterDetectResponse {
+  cluster_name: string;
+  cluster_category: string;
+  sub_category: string;
+  applicable_functions: string[];
+  goal_nature: string;
+  confidence: string;
+  reasoning: string;
+}
+
+export interface AIEmployeeRecommendRequest {
+  goal_title: string;
+  goal_description: string;
+  goal_kpi: string;
+  goal_cluster: string;
+  goal_nature: string;
+  team_members: Array<{
+    employee_id: string;
+    name: string;
+    role: string;
+    department?: string;
+    current_workload_percentage: number;
+    current_goals_count: number;
+    historical_performance_in_similar_goals?: string;
+    skills_demonstrated: string[];
+  }>;
+}
+
+export interface AIEmployeeRecommendation {
+  employee_id: string;
+  name: string;
+  role: string;
+  match_score: number;
+  match_reason: string;
+  current_workload: number;
+  workload_after_assignment: number;
+  fit_confidence: string;
+  risk_flag?: string | null;
+}
+
+export interface AIEmployeeRecommendResponse {
+  recommended_employees: AIEmployeeRecommendation[];
+  not_recommended: Array<{ employee_id: string; reason: string }>;
+  cluster_insight: string;
+}
+
 export interface RoleGoalRecommendation {
   title: string;
   description: string;
@@ -363,6 +434,7 @@ export interface HREmployeePerformance {
   progress: number;
   consistency: number;
   last_checkin_status: string;
+  last_checkin?: string | null;
   rating?: number | null;
   status: "On Track" | "Needs Attention" | "At Risk";
 }
@@ -445,13 +517,32 @@ export interface HROrgAnalytics {
 export interface HRCalibrationManager {
   manager_id: string;
   manager_name: string;
+  department?: string | null;
+  team_size?: number;
   avg_rating: number;
   org_avg_rating: number;
   bias_direction: string;
   delta: number;
+  avg_progress?: number;
+  consistency?: number;
+  at_risk_employees?: number;
+  last_checkin?: string | null;
+  members?: HREmployeePerformance[];
+  top_performers?: HREmployeePerformance[];
+  low_performers?: HREmployeePerformance[];
+}
+
+export interface HRCalibrationSummary {
+  total_managers: number;
+  total_employees: number;
+  total_team_members: number;
+  org_avg_rating: number;
+  at_risk_employees: number;
 }
 
 export interface HRCalibrationPayload {
+  generated_at?: string;
+  summary?: HRCalibrationSummary;
   managers: HRCalibrationManager[];
 }
 

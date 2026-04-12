@@ -1,0 +1,1 @@
+export { ManagerDashboard as default } from "@/components/dashboard/ManagerDashboard";

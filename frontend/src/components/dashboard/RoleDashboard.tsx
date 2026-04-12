@@ -9,7 +9,7 @@ import { HeatmapGrid } from "@/components/dashboard/HeatmapGrid";
 import { MetricChart } from "@/components/dashboard/MetricChart";
 import { ProgressCard } from "@/components/dashboard/ProgressCard";
 import { StackRankingTable } from "@/components/dashboard/StackRankingTable";
-import { StatCard } from "@/components/dashboard/StatCard";
+import { StatCard } from "@/components/shared/StatCard";
 import type { UserRole } from "@/types";
 import { dashboardService, type DashboardOverview } from "@/services/dashboard";
 

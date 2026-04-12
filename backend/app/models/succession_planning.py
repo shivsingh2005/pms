@@ -1,20 +1,21 @@
 from datetime import datetime
-
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
-from sqlalchemy.orm import Mapped, mapped_column
-
-from app.models.base import Base, UUIDMixin
+from sqlalchemy import String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
-class SuccessionPlanning(Base, UUIDMixin):
+class SuccessionPlanning(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "succession_planning"
 
-    employee_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    target_role: Mapped[str] = mapped_column(String(100), nullable=False)
-    readiness_score: Mapped[float] = mapped_column(nullable=False)
-    readiness_level: Mapped[str] = mapped_column(String(20), nullable=False)
-    gaps: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    organization_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
+    position_title: Mapped[str] = mapped_column(String, nullable=False)
+    current_holder_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    successor_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    readiness_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
     development_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
-    nominated_by: Mapped[str | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    
+    organization = relationship("Organization")
+    current_holder = relationship("User", foreign_keys=[current_holder_id])
+    successor = relationship("User", foreign_keys=[successor_id])

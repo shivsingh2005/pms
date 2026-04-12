@@ -29,10 +29,12 @@ import { Input } from "@/components/ui/input";
 import { isAuthFreePath, isPathAllowedForRole, resolveDefaultRouteForRole } from "@/lib/role-access";
 import { authService } from "@/services/auth";
 import { notificationsService } from "@/services/notifications";
+import { useAuth } from "@/context/AuthContext";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [hasHydrated, setHasHydrated] = useState(false);
   const [dark, setDark] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -44,18 +46,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
+  const auth = useAuth();
   const user = useSessionStore((s) => s.user);
   const activeMode = useSessionStore((s) => s.activeMode);
   const setActiveMode = useSessionStore((s) => s.setActiveMode);
   const patchUser = useSessionStore((s) => s.patchUser);
   const logout = useSessionStore((s) => s.logout);
-  const withAppShell = Boolean(user);
-  const hasManagerRole = user?.role === "manager";
+  const withAppShell = hasHydrated && Boolean(user);
+  const hasManagerRole = hasHydrated && user?.role === "manager";
   const canSwitchMode = hasManagerRole;
-  const effectiveRole: UserRole | null = user
+  const effectiveRole: UserRole | null = hasHydrated && user
     ? (hasManagerRole ? activeMode ?? "manager" : user.role)
     : null;
   const homeHref = effectiveRole ? resolveDefaultRouteForRole(effectiveRole) : "/";
+  const notificationItems = Array.isArray(notifications) ? notifications : [];
+
+  useEffect(() => {
+    setHasHydrated(true);
+  }, []);
 
   const tourStepsByRole: Record<UserRole, string[]> = {
     employee: [
@@ -118,10 +126,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const handleLogout = () => {
     authCookies.clearToken();
     authCookies.clearRefreshToken();
+    auth.logout();
     logout();
     setUserMenuOpen(false);
     setMobileNavOpen(false);
-    router.push("/");
+    router.replace("/login");
   };
 
   const toggleSidebar = () => {
@@ -145,7 +154,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!user) {
+    if (auth.loading || !user) {
       setNotifications([]);
       setUnreadCount(0);
       return;
@@ -158,7 +167,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       if (!payload || cancelled) {
         return;
       }
-      setNotifications(payload.items);
+      setNotifications(Array.isArray(payload.items) ? payload.items : []);
       setUnreadCount(payload.unread_count);
     };
 
@@ -174,7 +183,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [user]);
+  }, [auth.loading, user]);
 
   useEffect(() => {
     if (!user) {
@@ -196,6 +205,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   useEffect(() => {
+    if (!hasHydrated) {
+      return;
+    }
+
     if (!user || !effectiveRole) {
       return;
     }
@@ -206,10 +219,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [effectiveRole, pathname, router, user]);
 
   useEffect(() => {
+    if (!hasHydrated) {
+      return;
+    }
+
     if (!user && !isAuthFreePath(pathname)) {
       router.replace("/");
     }
-  }, [pathname, router, user]);
+  }, [hasHydrated, pathname, router, user]);
 
   const initials =
     user?.name
@@ -373,7 +390,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                           className="text-xs text-primary"
                           onClick={async () => {
                             await notificationsService.markAllRead().catch(() => null);
-                            setNotifications((prev) => prev.map((item) => ({ ...item, is_read: true })));
+                            setNotifications((prev) => (Array.isArray(prev) ? prev : []).map((item) => ({ ...item, is_read: true })));
                             setUnreadCount(0);
                           }}
                         >
@@ -381,17 +398,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         </button>
                       </div>
                       <div className="max-h-80 space-y-1 overflow-y-auto px-1">
-                        {notifications.length === 0 ? (
+                        {notificationItems.length === 0 ? (
                           <p className="px-2 py-6 text-center text-sm text-muted-foreground">No notifications yet.</p>
                         ) : (
-                          notifications.map((item) => (
+                          notificationItems.map((item) => (
                             <button
                               key={item.id}
                               type="button"
                               onClick={async () => {
                                 if (!item.is_read) {
                                   await notificationsService.markRead(item.id).catch(() => null);
-                                  setNotifications((prev) => prev.map((row) => (row.id === item.id ? { ...row, is_read: true } : row)));
+                                  setNotifications((prev) => (Array.isArray(prev) ? prev : []).map((row) => (row.id === item.id ? { ...row, is_read: true } : row)));
                                   setUnreadCount((prev) => Math.max(prev - 1, 0));
                                 }
                                 setNotificationsOpen(false);

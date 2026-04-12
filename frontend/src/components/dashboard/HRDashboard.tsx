@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight, Building2, Users } from "lucide-react";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
-import { StatCard } from "@/components/dashboard/StatCard";
+import { StatCard } from "@/components/shared/StatCard";
 import { Button } from "@/components/ui/button";
+import { fixed, n } from "@/lib/safe";
+import { resolveTrainingFocus, summarizeTopTrainingFocus } from "@/lib/training-focus";
 import { hrService } from "@/services/hr";
 import type { HROrgAnalytics, HROverview } from "@/types";
 
@@ -41,6 +43,20 @@ export function HRDashboard() {
         return score(b.training_need_level) - score(a.training_need_level);
       })
       .slice(0, 3);
+  }, [overview?.training_heatmap]);
+
+  const topTrainingFocus = useMemo(() => {
+    const focuses = (overview?.training_heatmap ?? [])
+      .filter((item) => item.needs_training)
+      .map((item) =>
+        resolveTrainingFocus({
+          progress: Number(item.progress ?? 0),
+          consistency: Number(item.consistency ?? 0),
+          rating: Number(item.rating ?? 0),
+          needsTraining: Boolean(item.needs_training),
+        }),
+      );
+    return summarizeTopTrainingFocus(focuses);
   }, [overview?.training_heatmap]);
 
   const hasRisk = (overview?.at_risk_employees ?? 0) > 0;
@@ -105,7 +121,7 @@ export function HRDashboard() {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Card className="space-y-3 rounded-2xl border border-border/75 bg-card/95">
           <CardTitle>Priority Employees</CardTitle>
-          <CardDescription>Top three training-need signals from the latest heatmap snapshot.</CardDescription>
+          <CardDescription>Top three training-need signals from the latest heatmap snapshot. Most needed training type: {topTrainingFocus}.</CardDescription>
           {loading ? (
             <p className="text-sm text-muted-foreground">Loading risk signals...</p>
           ) : riskRows.length === 0 ? (
@@ -118,7 +134,15 @@ export function HRDashboard() {
                   <span className="text-xs text-muted-foreground">{row.training_need_level}</span>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Progress {row.progress.toFixed(1)}% · Consistency {row.consistency.toFixed(1)}%
+                  Progress {fixed(n(row.progress, 0), 1)}% · Consistency {fixed(n(row.consistency, 0), 1)}%
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Training focus: {resolveTrainingFocus({
+                    progress: Number(row.progress ?? 0),
+                    consistency: Number(row.consistency ?? 0),
+                    rating: Number(row.rating ?? 0),
+                    needsTraining: Boolean(row.needs_training),
+                  })}
                 </p>
               </div>
             ))
