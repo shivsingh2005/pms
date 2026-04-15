@@ -27,10 +27,34 @@ AI-native Performance Management System (PMS) with role-based workflows for goal
 ### Prerequisites
 - Python 3.11+
 - Node.js 18+
-- PostgreSQL
+- PostgreSQL 14+
 - Redis (optional but recommended)
 
-### 1) Backend
+### 1) Clone and move to project root
+```powershell
+git clone <your-repo-url>
+cd ems
+```
+
+### 2) Configure environment files
+Create and populate these files before starting services:
+
+- `backend/.env`
+	- `DATABASE_URL=postgresql+asyncpg://<user>:<password>@localhost:5432/<db_name>`
+	- `JWT_SECRET_KEY=<your-secret>`
+	- `REDIS_URL=redis://localhost:6379/0`
+	- `GEMINI_API_KEY=<your-gemini-key>`
+	- `CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000`
+
+- `frontend/.env.local`
+	- `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000/api/v1`
+
+### 3) Create Python virtual environment (if not already created)
+```powershell
+python -m venv .venv
+```
+
+### 4) Start Backend
 ```powershell
 cd backend
 ..\.venv\Scripts\python.exe -m pip install -r requirements.txt
@@ -38,7 +62,7 @@ cd backend
 ..\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-### 2) Frontend
+### 5) Start Frontend (new terminal)
 ```powershell
 cd frontend
 npm install
@@ -47,6 +71,21 @@ npm run dev
 
 Frontend: `http://localhost:3000`
 Backend: `http://127.0.0.1:8000`
+
+### 6) Verify services
+- Backend health: `http://127.0.0.1:8000/health`
+- Frontend app: `http://localhost:3000`
+
+### Optional: run with Docker Compose
+From project root:
+
+```powershell
+docker compose up --build
+```
+
+Then open:
+- Frontend: `http://localhost:3000`
+- Backend: `http://127.0.0.1:8000`
 
 ## Environment Variables
 ### Backend (`backend/.env`)
